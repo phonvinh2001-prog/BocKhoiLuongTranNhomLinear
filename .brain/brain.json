@@ -1,0 +1,38 @@
+{
+  "meta": { "schema_version": "1.1.0", "awf_version": "3.3.0" },
+  "project": {
+    "name": "ALU-MASTER STUDIO",
+    "type": "Frontend Web App (Vanilla JS)",
+    "status": "Production/Maintenance"
+  },
+  "tech_stack": {
+    "frontend": {
+      "core": "HTML5/CSS3",
+      "js": "Vanilla ES6 Modules",
+      "icons": "Lucide"
+    },
+    "backend": { "none": "Client-side only" },
+    "database": { "local_storage": "USER_PRESETS" }
+  },
+  "features": [
+    { "name": "Floor Plan Drawing", "status": "Implemented" },
+    { "name": "Linear Ceiling Calculation", "status": "Implemented" },
+    { "name": "BOQ Export", "status": "Implemented" },
+    { "name": "Project Zone Management", "status": "Implemented" },
+    { "name": "Carrier Length Customization", "status": "Implemented" },
+    { "name": "Separated Panel Types in BOQ", "status": "Implemented" },
+    { "name": "Hanger Length Customization", "status": "Implemented" },
+    { "name": "Project Accessories Summation", "status": "Implemented" }
+  ],
+  "knowledge_items": {
+    "patterns": [
+      "Module Pattern",
+      "Canvas 2D Rendering",
+      "Bin Packing Algorithm"
+    ],
+    "gotchas": [
+      "Carrier Length default is 3m if not specified",
+      "Gap width 0 must be handled explicitly"
+    ]
+  }
+}

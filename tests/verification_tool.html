@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Algorithm Verification Tool</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      .pass {
+        color: green;
+        font-weight: bold;
+      }
+      .fail {
+        color: red;
+        font-weight: bold;
+      }
+      .box {
+        background: #f0f0f0;
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>🧪 Bin Packing Algorithm Verification</h2>
+    <div id="results"></div>
+
+    <script>
+      // --- LOGIC TO TEST (Copied from Engine.js) ---
+      function calculateOptimizedBars(
+        segments,
+        barLength,
+        sawBladeWidth = 0.005,
+      ) {
+        let sortedSegs = [...segments].sort((a, b) => b - a);
+        let bars = [];
+
+        for (let seg of sortedSegs) {
+          let placed = false;
+          for (let i = 0; i < bars.length; i++) {
+            if (bars[i] >= seg + sawBladeWidth) {
+              bars[i] -= seg + sawBladeWidth;
+              placed = true;
+              break;
+            }
+          }
+
+          if (!placed) {
+            if (seg > barLength) {
+              let requiredForThisSeg = Math.ceil(seg / barLength);
+              for (let k = 0; k < requiredForThisSeg; k++) bars.push(0);
+            } else {
+              bars.push(barLength - seg - sawBladeWidth);
+            }
+          }
+        }
+        return bars.length;
+      }
+
+      // --- TEST RUNNER ---
+      const resultsEl = document.getElementById("results");
+
+      function assert(name, actual, expected) {
+        const div = document.createElement("div");
+        div.className = "box";
+        if (actual === expected) {
+          div.innerHTML = `<span class="pass">✅ PASS</span>: ${name} <br> Expected: ${expected} | Actual: ${actual}`;
+        } else {
+          div.innerHTML = `<span class="fail">❌ FAIL</span>: ${name} <br> Expected: ${expected} | Actual: ${actual}`;
+        }
+        resultsEl.appendChild(div);
+      }
+
+      // --- TEST CASES ---
+
+      // Case 1: Simple fit
+      // Segments: 2m, 2m, 2m. Bar: 6m. Should fit in 1 bar (2+2+2 = 6)
+      assert(
+        "Case 1: 3x2m in 6m bar",
+        calculateOptimizedBars([2, 2, 2], 6.0),
+        1,
+      );
+
+      // Case 2: Simple overflow
+      // Segments: 4m, 4m. Bar: 6m. Should take 2 bars.
+      assert("Case 2: 2x4m in 6m bar", calculateOptimizedBars([4, 4], 6.0), 2);
+
+      // Case 3: Optimization check
+      // Segments: 3m, 2m, 3m, 2m. Bar: 5m.
+      // Optimal: [3,2], [3,2] -> 2 bars.
+      // Naive might fail.
+      assert(
+        "Case 3: [3,2,3,2] in 5m bar",
+        calculateOptimizedBars([3, 2, 3, 2], 5.0),
+        2,
+      );
+
+      // Case 4: Long segment split (Simulated behavior, logic treats >barLen as multiple bars)
+      // Segment: 7m. Bar: 3m. Need ceil(7/3) = 3 bars.
+      assert(
+        "Case 4: 7m segment in 3m bar",
+        calculateOptimizedBars([7], 3.0),
+        3,
+      );
+
+      // Case 5: Custom carrier length impact
+      // Segments: [2.8, 2.8, 2.8]
+      // Bar 3m -> 3 bars (each takes 1)
+      // Bar 6m -> 2 bars ([2.8, 2.8], [2.8])
+      assert(
+        "Case 5A: [2.8, 2.8, 2.8] in 3m bar",
+        calculateOptimizedBars([2.8, 2.8, 2.8], 3.0),
+        3,
+      );
+      assert(
+        "Case 5B: [2.8, 2.8, 2.8] in 6m bar",
+        calculateOptimizedBars([2.8, 2.8, 2.8], 6.0),
+        2,
+      );
+    </script>
+  </body>
+</html>

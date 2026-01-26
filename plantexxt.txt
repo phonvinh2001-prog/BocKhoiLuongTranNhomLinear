@@ -1,0 +1,12 @@
+alu-master-v17/
+│
+├── index.html          (Cổng chính công trường)
+├── css/
+│   └── style.css       (Bản vẽ hoàn thiện/màu sắc)
+│
+└── js/                 (Khu vực xử lý kỹ thuật)
+    ├── constants.js    (Thông số kỹ thuật, định mức)
+    ├── utils.js        (Công cụ tính toán toán học thuần túy)
+    ├── Engine.js       (Bộ xử lý trung tâm - Core Logic)
+    ├── VisualOverlay.js (Extension soi bản vẽ)
+    └── main.js         (Tổng chỉ huy - Nơi khởi chạy app)

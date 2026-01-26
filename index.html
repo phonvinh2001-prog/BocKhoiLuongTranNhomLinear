@@ -1,0 +1,454 @@
+<!-- 
+[SHOPDRAWING SYSTEM] ALU-MASTER STUDIO v17.0
+Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FASCIA)
+-->
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ALU-MASTER STUDIO v17.0 (Modular System)</title>
+    <link rel="stylesheet" href="css/style.css" />
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <!-- [LAYOUT] Sidebar + Viewport -->
+    <div class="sidebar">
+      <!-- [HEADER] -->
+      <div class="header">
+        <h2>
+          <i data-lucide="calculator" class="icon-sm"></i> TÍNH TOÁN TRẦN NHÔM
+        </h2>
+        <div class="sub">Modular System Optimization Engine v17.0</div>
+      </div>
+
+      <!-- [SCROLL AREA] -->
+      <div class="scroll-area">
+        <!-- GROUP 1: SETUP -->
+        <div class="group">
+          <div class="group-title">1. Thiết lập Mặt Bằng</div>
+
+          <!-- TABS -->
+          <div class="mode-tabs">
+            <button
+              class="tab-btn active"
+              id="btn_tab_preset"
+              onclick="app.switchMode('PRESET')"
+            >
+              <i data-lucide="layout-template" class="icon-xs"></i> Hình Mẫu
+            </button>
+            <button
+              class="tab-btn"
+              id="btn_tab_free"
+              onclick="app.switchMode('FREE')"
+            >
+              <i data-lucide="pen-tool" class="icon-xs"></i> Vẽ Tự Do
+            </button>
+          </div>
+
+          <!-- PRESET MODE -->
+          <div id="ui_preset">
+            <div class="row">
+              <label>Hình dáng</label>
+              <select id="shp_type" onchange="app.preset()">
+                <option value="R">Chữ Nhật</option>
+                <option value="L">Chữ L</option>
+                <option value="U">Chữ U</option>
+              </select>
+            </div>
+            <div class="row">
+              <label>Chiều Dài (m)</label>
+              <input
+                type="number"
+                id="dim_L"
+                value="10.0"
+                step="0.5"
+                onchange="app.preset()"
+              />
+            </div>
+            <div class="row">
+              <label>Chiều Rộng (m)</label>
+              <input
+                type="number"
+                id="dim_W"
+                value="6.0"
+                step="0.5"
+                onchange="app.preset()"
+              />
+            </div>
+
+            <!-- L Options -->
+            <div id="L_opts" class="opt-group hidden">
+              <div class="row">
+                <label>✂️ Hướng cắt góc</label>
+                <select id="l_orient" onchange="app.preset()">
+                  <option value="BOTTOM_RIGHT">Phải-Dưới (mặc định)</option>
+                  <option value="BOTTOM_LEFT">Trái-Dưới</option>
+                  <option value="TOP_RIGHT">Phải-Trên</option>
+                  <option value="TOP_LEFT">Trái-Trên</option>
+                </select>
+              </div>
+              <div class="row">
+                <label>📐 Cắt Dài (m)</label>
+                <input
+                  type="number"
+                  id="dim_Lc"
+                  value="4.0"
+                  step="0.1"
+                  onchange="app.preset()"
+                  title="Chiều dài phần cắt góc"
+                />
+              </div>
+              <div class="row">
+                <label>📏 Cắt Rộng (m)</label>
+                <input
+                  type="number"
+                  id="dim_Wc"
+                  value="2.5"
+                  step="0.1"
+                  onchange="app.preset()"
+                  title="Chiều rộng phần cắt góc"
+                />
+              </div>
+            </div>
+
+            <!-- U Options -->
+            <div id="U_opts" class="opt-group hidden">
+              <div class="row">
+                <label>🔽 Hướng mở</label>
+                <select id="u_orient" onchange="app.preset()">
+                  <option value="TOP">⬆️ Trên</option>
+                  <option value="BOTTOM">⬇️ Dưới</option>
+                  <option value="LEFT">⬅️ Trái</option>
+                  <option value="RIGHT">➡️ Phải</option>
+                </select>
+              </div>
+              <div class="row">
+                <label>📏 Cánh 1 (m)</label>
+                <input
+                  type="number"
+                  id="dim_u_arm_1"
+                  value="2.0"
+                  step="0.1"
+                  onchange="app.preset()"
+                  title="Độ dày cánh bên trái/trên"
+                />
+              </div>
+              <div class="row">
+                <label>📐 Cánh 2 (m)</label>
+                <input
+                  type="number"
+                  id="dim_u_arm_2"
+                  value="2.0"
+                  step="0.1"
+                  onchange="app.preset()"
+                  title="Độ dày cánh bên phải/dưới"
+                />
+              </div>
+              <div class="row">
+                <label>📊 Đáy (m)</label>
+                <input
+                  type="number"
+                  id="dim_u_base"
+                  value="2.0"
+                  step="0.1"
+                  onchange="app.preset()"
+                  title="Độ dày đáy chữ U"
+                />
+              </div>
+            </div>
+            <!-- Preview Panel -->
+            <div id="preview-panel" class="preview-panel hidden">
+              <div class="preview-header">
+                <i data-lucide="eye" class="icon-xs"></i> Preview
+              </div>
+              <canvas
+                id="previewCanvas"
+                class="preview-canvas"
+                width="300"
+                height="200"
+              ></canvas>
+              <div id="preview-status" class="preview-status">
+                <i data-lucide="check-circle" class="icon-xs"></i> Sẵn sàng
+              </div>
+            </div>
+
+            <div class="hint-box">
+              <i data-lucide="info" class="icon-xs"></i> Nhập kích thước để tạo
+              hình tự động.
+            </div>
+          </div>
+
+          <!-- FREE MODE -->
+          <div id="ui_free" class="hidden">
+            <div class="hint-box warning">
+              <i data-lucide="mouse-pointer-2" class="icon-xs"></i>
+              Trái: Thêm điểm • Phải: Khép góc
+            </div>
+            <button class="btn btn-draw mt-2" onclick="app.resetDraw()">
+              <i data-lucide="rotate-ccw" class="icon-sm"></i> BẮT ĐẦU VẼ LẠI
+            </button>
+            <div class="row mt-2">
+              <label>Snap (Bắt điểm)</label>
+              <input type="checkbox" checked disabled title="Luôn bật" />
+            </div>
+          </div>
+        </div>
+
+        <!-- GROUP 2: CEILING PARAMETERS -->
+        <div class="group">
+          <div class="group-title">2. Thông số Trần (Linear)</div>
+          <div class="row">
+            <label>Chọn Mẫu</label>
+            <select id="cfg_preset" onchange="app.applyPreset()"></select>
+            <button
+              class="btn-icon-only"
+              onclick="app.openPresetModal()"
+              title="Tạo mẫu mới"
+            >
+              <i data-lucide="plus" class="icon-xs"></i>
+            </button>
+          </div>
+          <div class="row">
+            <label>Bản rộng Tấm</label>
+            <input type="number" id="cfg_pW" value="100" placeholder="mm" />
+          </div>
+          <div class="row">
+            <label>Khe hở Tấm</label>
+            <input type="number" id="cfg_gW" value="0" placeholder="mm" />
+          </div>
+          <div class="row">
+            <label>Chiều dài Nhôm</label>
+            <input type="number" id="cfg_maxL" value="6.0" placeholder="m" />
+          </div>
+          <div class="row">
+            <label>Giới hạn VC (m)</label>
+            <input type="number" id="cfg_maxTrans" value="12.0" step="0.5" />
+          </div>
+          <div class="row">
+            <label>Min Cắt (Vụn)</label>
+            <input type="number" id="cfg_minCut" value="200" class="text-red" />
+          </div>
+          <div class="row">
+            <label>Hướng rải</label>
+            <select id="cfg_dir" onchange="app.calculate()">
+              <option value="0">Ngang (0°)</option>
+              <option value="90" selected>Dọc (90°)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- GROUP 3: STRUCTURE -->
+        <div class="group">
+          <div class="group-title">3. Viền & Kết cấu</div>
+          <div class="row">
+            <label>Khe hở Tường</label>
+            <input type="number" id="cfg_wGap" value="0" placeholder="mm" />
+          </div>
+          <div class="row">
+            <label>Bước Xương</label>
+            <input type="number" id="cfg_cX" value="1.0" placeholder="m" />
+          </div>
+          <div class="row">
+            <label>Bước Ty</label>
+            <input type="number" id="cfg_tY" value="1.0" placeholder="m" />
+          </div>
+          <div class="row">
+            <label>Chiều dài Ty TB</label>
+            <input
+              type="number"
+              id="cfg_hangerL"
+              value="1.0"
+              step="0.1"
+              placeholder="m"
+              title="Chiều dài trung bình của ty treo"
+            />
+          </div>
+          <div class="row">
+            <label>Dài cây Xương</label>
+            <div class="input-with-list" style="flex: 1">
+              <input
+                type="number"
+                id="cfg_carrierL"
+                list="carrier_opts"
+                value="3.0"
+                step="0.1"
+                placeholder="m"
+              />
+              <datalist id="carrier_opts">
+                <option value="3.0"></option>
+                <option value="4.0"></option>
+                <option value="5.0"></option>
+                <option value="6.0"></option>
+              </datalist>
+            </div>
+          </div>
+          <div class="row">
+            <label>Hao hụt (%)</label>
+            <input type="number" id="cfg_waste" value="3" />
+          </div>
+        </div>
+
+        <!-- ACTIONS -->
+        <div class="btn-group">
+          <button class="btn btn-calc" onclick="app.calculate()">
+            <i data-lucide="play" class="icon-sm"></i> TÍNH TOÁN
+          </button>
+          <button class="btn btn-boq" onclick="app.showBOQ()">
+            <i data-lucide="file-spreadsheet" class="icon-sm"></i> XUẤT QS
+          </button>
+          <button class="btn btn-project-boq" onclick="app.showProjectBOQ()">
+            <i data-lucide="folder-kanban" class="icon-sm"></i> PROJECT
+          </button>
+        </div>
+
+        <!-- GROUP 4: PROJECT -->
+        <div class="group">
+          <div class="group-title">4. Quản lý Dự án</div>
+          <div class="row">
+            <label>Tên phòng</label>
+            <input
+              type="text"
+              id="projectName"
+              placeholder="Tên zone..."
+              class="text-left"
+            />
+          </div>
+          <div class="row mt-2">
+            <button
+              id="btn_addProject"
+              class="btn btn-secondary width-100"
+              onclick="app.addToProject()"
+            >
+              <i data-lucide="plus-circle" class="icon-sm"></i> Thêm vào Project
+            </button>
+          </div>
+          <div id="projectList" class="project-list"></div>
+        </div>
+
+        <!-- HINT -->
+        <div class="hint-box blue">
+          <b
+            ><i data-lucide="lightbulb" class="icon-xs"></i> Multi-Edge
+            Interaction:</b
+          ><br />
+          Click cạnh tường để đổi viền: <br />
+          🔴 V-Góc • 🟣 Shadow Gap • 🔵 Fascia • ⚪ None
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEWPORT -->
+    <div class="viewport" id="cont">
+      <canvas id="cvs"></canvas>
+
+      <!-- LEGEND -->
+      <div class="legend">
+        <div class="leg-item"><span class="mark bg-trim-v"></span> V-Góc</div>
+        <div class="leg-item">
+          <span class="mark bg-trim-shadow"></span> Shadow Gap
+        </div>
+        <div class="leg-item">
+          <span class="mark bg-trim-fascia"></span> Fascia
+        </div>
+        <div class="leg-item">
+          <span class="mark bg-panel-stroke"></span> Joint Tấm
+        </div>
+        <div class="leg-item">
+          <span class="mark bg-anger rounded"></span> Ty Treo
+        </div>
+      </div>
+
+      <!-- OVERLAY -->
+      <div class="overlay-hd" id="coords">Ready.</div>
+    </div>
+
+    <!-- MODAL BOQ -->
+    <div id="boqModal" class="modal hidden">
+      <div class="modal-box">
+        <div class="modal-head">
+          <h3><i data-lucide="file-check" class="icon-md"></i> QS BREAKDOWN</h3>
+          <div class="modal-actions">
+            <button class="btn btn-sm btn-success" onclick="app.exportCSV()">
+              <i data-lucide="download" class="icon-xs"></i> Xuất Excel
+            </button>
+            <span
+              class="close-btn"
+              onclick="
+                document.getElementById('boqModal').classList.add('hidden')
+              "
+            >
+              <i data-lucide="x" class="icon-sm"></i>
+            </span>
+          </div>
+        </div>
+        <div class="modal-body" id="boqContent"></div>
+      </div>
+    </div>
+
+    <!-- MODAL PRESET -->
+    <div id="presetModal" class="modal hidden">
+      <div class="modal-box small">
+        <div class="modal-head">
+          <h3><i data-lucide="library" class="icon-md"></i> Thư viện Mẫu</h3>
+          <span
+            class="close-btn"
+            onclick="
+              document.getElementById('presetModal').classList.add('hidden')
+            "
+          >
+            <i data-lucide="x" class="icon-sm"></i>
+          </span>
+        </div>
+        <div class="modal-body">
+          <div class="form-section">
+            <h4><i data-lucide="plus" class="icon-xs"></i> Tạo Mẫu Mới</h4>
+            <div class="row sm-gap">
+              <label>Tên Mẫu</label
+              ><input
+                type="text"
+                id="newPresetName"
+                placeholder="VD: C85"
+                class="text-left"
+              />
+            </div>
+            <div class="row sm-gap">
+              <label>Bản rộng (mm)</label
+              ><input type="number" id="newPresetPW" placeholder="100" />
+            </div>
+            <div class="row sm-gap">
+              <label>Khe hở (mm)</label
+              ><input type="number" id="newPresetGW" placeholder="15" />
+            </div>
+            <div class="row sm-gap">
+              <label>Max dài (m)</label
+              ><input
+                type="number"
+                id="newPresetMaxL"
+                step="0.1"
+                placeholder="6.0"
+              />
+            </div>
+            <div class="row sm-gap">
+              <label>Màu sắc</label
+              ><input type="color" id="newPresetColor" value="#E3F2FD" />
+            </div>
+            <button
+              class="btn btn-primary mt-2 width-100"
+              onclick="app.saveNewPreset()"
+            >
+              <i data-lucide="save" class="icon-xs"></i> Lưu Mẫu
+            </button>
+          </div>
+          <div class="list-section">
+            <h4><i data-lucide="list" class="icon-xs"></i> Danh sách</h4>
+            <div id="presetList" class="scroll-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
