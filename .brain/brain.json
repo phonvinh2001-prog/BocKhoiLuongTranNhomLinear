@@ -25,7 +25,12 @@
     { "name": "Separated Panel Types in BOQ", "status": "Implemented" },
     { "name": "Hanger Length Customization", "status": "Implemented" },
     { "name": "Project Accessories Summation", "status": "Implemented" },
-    { "name": "Data Persistence (Auto-Save)", "status": "Implemented" }
+    { "name": "Data Persistence (Auto-Save)", "status": "Implemented" },
+    {
+      "name": "Project File Management (Export/Import/New)",
+      "status": "Implemented"
+    },
+    { "name": "Improved Excel (CSV) Export", "status": "Implemented" }
   ],
   "knowledge_items": {
     "patterns": [
