@@ -303,8 +303,8 @@ export default class Engine {
     const type = document.getElementById("shp_type").value;
 
     // [FIX #1] Use getInputValue for safe NaN handling
-    const L = this.getInputValue("dim_L", 0.5, 1000, 10.0, true);
-    const W = this.getInputValue("dim_W", 0.5, 1000, 6.0, true);
+    const L = this.getInputValue("dim_L", 0.2, 1000, 10.0, true);
+    const W = this.getInputValue("dim_W", 0.2, 1000, 6.0, true);
 
     // [FIX] Replace style.display with classList to override CSS !important
     const lOptsEl = document.getElementById("L_opts");
@@ -555,8 +555,8 @@ export default class Engine {
 
       if (Lc >= L) errors.push("Cắt dài phải < Chiều dài");
       if (Wc >= W) errors.push("Cắt rộng phải < Chiều rộng");
-      if (Lc < 0.5) warnings.push("Cắt dài nhỏ (<0.5m)");
-      if (Wc < 0.5) warnings.push("Cắt rộng nhỏ (<0.5m)");
+      if (Lc < 0.2) warnings.push("Cắt dài nhỏ (<0.2m)");
+      if (Wc < 0.2) warnings.push("Cắt rộng nhỏ (<0.2m)");
     } else if (shapeType === "U") {
       const L = this.getInputValue("dim_L", 0, 1000, 10.0);
       const W = this.getInputValue("dim_W", 0, 1000, 6.0);
@@ -1335,6 +1335,21 @@ export default class Engine {
     );
     const trimBarsOrder = Math.ceil(trimBarsReal * accessoryWaste);
 
+    // [NEW] TÍNH TOÁN SHADOW GAP (Z-PROFILE)
+    const shadowSegments = this.state.edges
+      .filter((e) => e.type === "SHADOW")
+      .map((e) =>
+        Math.sqrt(Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2)),
+      );
+
+    const totalShadowLen = shadowSegments.reduce((a, b) => a + b, 0);
+    // Giả sử thanh Shadow cũng dài 3m giống V-Góc (hoặc lấy từ CONST)
+    const shadowBarsReal = this.calculateOptimizedBars(
+      shadowSegments,
+      CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
+    );
+    const shadowBarsOrder = Math.ceil(shadowBarsReal * accessoryWaste);
+
     // 3. TÍNH TOÁN FASCIA
     const fasciaSegments = this.state.edges
       .filter((e) => e.type === "FASCIA")
@@ -1402,6 +1417,10 @@ export default class Engine {
       trims: {
         totalLen: totalTrimLen.toFixed(2),
         bars: trimBarsOrder,
+      },
+      shadowTrims: {
+        totalLen: totalShadowLen.toFixed(2),
+        bars: shadowBarsOrder,
       },
       fascia: {
         totalLen: totalFasciaLen.toFixed(2),
@@ -1474,6 +1493,21 @@ export default class Engine {
             ${row(`Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm)`, "m2", metrics.totalArea, true)}
             ${row(`Thanh xương (${carrierBarL}m)`, "Cây", metrics.carriers.bars, true)}
             ${row("Thanh V-Góc (3m)", "Cây", metrics.trims.bars, true)}
+            ${
+              metrics.shadowTrims && metrics.shadowTrims.bars > 0
+                ? row(
+                    "Thanh Shadow Gap (3m)",
+                    "Cây",
+                    metrics.shadowTrims.bars,
+                    true,
+                  )
+                : ""
+            }
+             ${
+               metrics.fascia && metrics.fascia.totalLen > 0
+                 ? row("Mặt dựng Fascia", "md", metrics.fascia.totalLen, true)
+                 : ""
+             }
         </table>
 
         <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px; color: #2E7D32;">2. PHỤ KIỆN & HỆ TREO</h4>
@@ -1817,10 +1851,13 @@ export default class Engine {
     csv += `Dự án,${projectName}\n`;
     csv += `Ngày xuất,${dateStr}\n\n`;
 
+    // Luôn tính toán data chuẩn để có metrics base (dùng cho carrier, trims...)
+    const metrics = this.calculateBOQData();
+
     if (isModalOpen) {
       // --- MODE 1: EXPORT WHAT YOU SEE (FROM DOM) ---
+      // Nếu modal mở, ta ưu tiên lấy số liệu user đã sửa trong bảng
 
-      // 1. Vật tư chính & Phụ kiện
       csv += `VẬT TƯ & PHỤ KIỆN (Đã chỉnh sửa)\n`;
       csv += `Tên Vật Tư,ĐVT,Số Lượng\n`;
 
@@ -1836,7 +1873,9 @@ export default class Engine {
             const name = inputs[0].value;
             const unit = inputs[1].value;
             const val = inputs[2].value;
-            csv += `${name},${unit},${val}\n`;
+            if (name && val) {
+              csv += `${name},${unit},${val}\n`;
+            }
           }
         });
       };
@@ -1861,11 +1900,42 @@ export default class Engine {
       }
     } else {
       // --- MODE 2: EXPORT FROM CALCULATION (RAW) ---
-      // Logic cũ: Tính tự động nếu modal không mở
-      const metrics = this.calculateBOQData();
-      csv += `Tổng diện tích,${metrics.totalArea},m2\n\n`;
+      // Logic: Tính toán tự động hoàn toàn
 
-      // [PART 1] PANTELS
+      csv += `BẢNG TỔNG HỢP VẬT TƯ (Tự động tính)\n`;
+      csv += `Tên Vật Tư,ĐVT,Số Lượng,Ghi chú\n`;
+
+      // 1. Tấm trần
+      csv += `Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm),m2,${metrics.totalArea},\n`;
+
+      // 2. Hệ khung xương
+      csv += `Thanh Xương gài (Carrier) ${carrierBarL}m,Cây,${metrics.carriers.bars},Tổng: ${metrics.carriers.totalLen} md\n`;
+      csv += `Thanh V-Góc (3.0m),Cây,${metrics.trims.bars},Tổng: ${metrics.trims.totalLen} md\n`;
+
+      // [NEW] Shadow Gap
+      if (metrics.shadowTrims && metrics.shadowTrims.bars > 0) {
+        csv += `Thanh Shadow Gap (Z-Profile) 3.0m,Cây,${metrics.shadowTrims.bars},Tổng: ${metrics.shadowTrims.totalLen} md\n`;
+      }
+
+      // Fascia
+      if (metrics.fascia && metrics.fascia.totalLen > 0) {
+        csv += `Tấm Fascia/Kính mặt dựng,md,${metrics.fascia.totalLen},Hao hụt cắt: check thực tế\n`;
+      }
+
+      // 3. Phụ kiện
+      csv += `Khóa nối xương (Coupler),Cái,${metrics.carriers.couplers},\n`;
+      csv += `Móc treo xương,Cái,${metrics.hangers.details.mocTreoXuong},\n`;
+      csv += `Ty ren (2m),Cây,${metrics.hangers.tyRenBars},Tổng: ${metrics.hangers.details.tyRenMeters} md\n`;
+      csv += `Bộ Nở đạn + Ecu,Bộ,${metrics.hangers.details.noDan},\n`;
+
+      // Splicer
+      if (metrics.accessories.splicer > 0) {
+        csv += `Phụ kiện nối tấm (Splicer),Cái,${metrics.accessories.splicer},\n`;
+      }
+
+      csv += `\n`;
+
+      // [PART 2] CHI TIẾT CẮT TẤM
       csv += `LỆNH SẢN XUẤT TẤM\n`;
       csv += `Chiều dài (mm),SL Net,Ghi chú\n`;
       Object.keys(metrics.panels.groups)
@@ -1874,41 +1944,7 @@ export default class Engine {
           const item = metrics.panels.groups[len];
           csv += `${(len * 1000).toFixed(0)},${item.qty},${item.status}\n`;
         });
-      csv += `\n`;
-
-      // [PART 2] ACCESSORIES
-      csv += `VẬT TƯ\n`;
-      csv += `Tên,ĐVT,SL\n`;
-      csv += `Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm),m2,${metrics.totalArea}\n`;
-      csv += `Thanh Carrier (${carrierBarL}m),Cây,${metrics.carriers.bars}\n`;
-      csv += `Thanh V-Góc (3m),Cây,${metrics.trims.bars}\n`;
-      csv += `Khóa nối,Cái,${metrics.carriers.couplers}\n`;
-      csv += `Móc treo,Cái,${metrics.hangers.details.mocTreoXuong}\n`;
-      csv += `Ty ren (2m),Cây,${metrics.hangers.tyRenBars}\n`;
-      csv += `Nở đạn,Bộ,${metrics.hangers.details.noDan}\n`;
     }
-
-    // Carriers
-    csv += `Xương gài (Carrier),${carrierBarL}m,Cây,${metrics.carriers.bars},${metrics.carriers.totalLen} md\n`;
-
-    // V-Angles
-    if (metrics.trims.totalLen > 0) {
-      csv += `Thanh V-Góc,3.0m,Cây,${metrics.trims.bars},${metrics.trims.totalLen} md\n`;
-    }
-
-    // Hangars
-    csv += `Ty ren treo trần,Thanh 2m,Cây,${metrics.hangers.tyRenBars},${metrics.hangers.details.tyRenMeters} md\n`;
-    csv += `Bộ Nở đạn + Ecu,Bộ,Bộ,${metrics.hangers.details.noDan},\n`;
-    csv += `Móc treo xương,Cái,Cái,${metrics.hangers.details.mocTreoXuong},\n`;
-    csv += `Khóa nối xương,Cái,Cái,${metrics.carriers.couplers},\n`;
-
-    // Splicer
-    if (metrics.accessories.splicer > 0) {
-      csv += `Phụ kiện nối tấm (Splicer),Cái,Cái,${metrics.accessories.splicer},\n`;
-    }
-
-    // Fascia (optional detailed listing if needed, generally simplified)
-    csv += `\n`;
 
     // [DOWNLOAD]
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
