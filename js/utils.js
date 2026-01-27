@@ -71,4 +71,28 @@ export function distToSeg(p, v, w) {
 // - intersectSegments(): Tính giao điểm 2 đoạn thẳng
 // - areaPolygon(): Tính diện tích đa giác (shoelace formula)
 // - sortPoints(): Sắp xếp điểm theo thứ tự ngược chiều kim đồng hồ
-// - etc.
+// --- STORAGE HELPERS (DATA PERSISTENCE) ---
+// [CÔNG DỤNG] Lưu và tải dữ liệu từ LocalStorage an toàn
+// [AN TOÀN] Có try-catch để tránh lỗi quota hoặc parse error
+
+export function saveToStorage(key, data) {
+  try {
+    const json = JSON.stringify(data);
+    localStorage.setItem(key, json);
+    return true;
+  } catch (e) {
+    console.error(`❌ Lỗi lưu storage [${key}]:`, e);
+    return false;
+  }
+}
+
+export function loadFromStorage(key) {
+  try {
+    const json = localStorage.getItem(key);
+    if (!json) return null;
+    return JSON.parse(json);
+  } catch (e) {
+    console.error(`❌ Lỗi đọc storage [${key}]:`, e);
+    return null;
+  }
+}

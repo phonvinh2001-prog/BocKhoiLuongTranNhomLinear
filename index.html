@@ -325,6 +325,39 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
             </button>
           </div>
           <div id="projectList" class="project-list"></div>
+
+          <!-- PROJECT ACTIONS -->
+          <div class="btn-group mt-2" style="flex-wrap: wrap; gap: 6px">
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="app.exportProject()"
+              title="Lưu dự án ra file JSON"
+            >
+              <i data-lucide="download" class="icon-xs"></i> Lưu File
+            </button>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="document.getElementById('loadProjectInput').click()"
+              title="Tải dự án từ file JSON"
+            >
+              <i data-lucide="upload" class="icon-xs"></i> Tải File
+            </button>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="app.newProject()"
+              title="Tạo dự án mới (xóa tất cả)"
+              style="border-color: #ffcccc; color: #c62828"
+            >
+              <i data-lucide="file-plus" class="icon-xs"></i> Dự án Mới
+            </button>
+          </div>
+          <input
+            type="file"
+            id="loadProjectInput"
+            accept=".json"
+            style="display: none"
+            onchange="app.loadProject(event)"
+          />
         </div>
 
         <!-- HINT -->
@@ -370,8 +403,19 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
         <div class="modal-head">
           <h3><i data-lucide="file-check" class="icon-md"></i> QS BREAKDOWN</h3>
           <div class="modal-actions">
-            <button class="btn btn-sm btn-success" onclick="app.exportCSV()">
-              <i data-lucide="download" class="icon-xs"></i> Xuất Excel
+            <button
+              class="btn btn-sm btn-success"
+              onclick="app.exportCSV()"
+              title="Xuất phòng hiện tại"
+            >
+              <i data-lucide="download" class="icon-xs"></i> Xuất Phòng
+            </button>
+            <button
+              class="btn btn-sm btn-success"
+              onclick="app.exportProjectCSV()"
+              title="Xuất tất cả phòng trong Project"
+            >
+              <i data-lucide="file-archive" class="icon-xs"></i> Xuất Dự Án
             </button>
             <span
               class="close-btn"

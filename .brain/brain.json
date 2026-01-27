@@ -12,7 +12,9 @@
       "icons": "Lucide"
     },
     "backend": { "none": "Client-side only" },
-    "database": { "local_storage": "USER_PRESETS" }
+    "database": {
+      "local_storage": "USER_PRESETS, ALUMASTER_V17_STATE"
+    }
   },
   "features": [
     { "name": "Floor Plan Drawing", "status": "Implemented" },
@@ -22,17 +24,25 @@
     { "name": "Carrier Length Customization", "status": "Implemented" },
     { "name": "Separated Panel Types in BOQ", "status": "Implemented" },
     { "name": "Hanger Length Customization", "status": "Implemented" },
-    { "name": "Project Accessories Summation", "status": "Implemented" }
+    { "name": "Project Accessories Summation", "status": "Implemented" },
+    { "name": "Data Persistence (Auto-Save)", "status": "Implemented" },
+    {
+      "name": "Project File Management (Export/Import/New)",
+      "status": "Implemented"
+    },
+    { "name": "Improved Excel (CSV) Export", "status": "Implemented" }
   ],
   "knowledge_items": {
     "patterns": [
       "Module Pattern",
       "Canvas 2D Rendering",
-      "Bin Packing Algorithm"
+      "Bin Packing Algorithm",
+      "Local Storage Persistence"
     ],
     "gotchas": [
       "Carrier Length default is 3m if not specified",
-      "Gap width 0 must be handled explicitly"
+      "Gap width 0 must be handled explicitly",
+      "LocalStorage limited to ~5MB"
     ]
   }
 }

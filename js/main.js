@@ -19,6 +19,9 @@ setTimeout(() => {
 
   window.overlayExtension = new VisualOverlay(app);
   console.log("✅ Module Overlay: Ready.");
+
+  // [DATA PERSISTENCE] Khôi phục dữ liệu cũ
+  app.loadState();
 }, 200);
 
 // --- QUAN TRỌNG: GÁN VÀO WINDOW ---

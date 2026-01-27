@@ -26,7 +26,7 @@ Quy ước màu & trạng thái:
 
 // 1. NHẬP CÁC PHỤ TÙNG CẦN THIẾT
 import { EDGE_TYPES, CONSTRUCTION_STD } from "./constants.js"; // Nhập định nghĩa vật tư
-import { distToSeg } from "./utils.js"; // Nhập công cụ tính toán
+import { distToSeg, saveToStorage, loadFromStorage } from "./utils.js"; // Nhập công cụ tính toán & storage
 import PreviewRenderer from "./PreviewRenderer.js"; // Nhập renderer cho preview panel
 
 // 2. XUẤT CLASS ĐỂ MAIN.JS CÓ THỂ DÙNG
@@ -58,6 +58,10 @@ export default class Engine {
       lastM: { x: 0, y: 0 }, // Vị trí chuột lần trước
       inputMode: "PRESET", // "PRESET" (nhập hình mẫu) hoặc "FREE" (vẽ tự do)
     };
+
+    // [DATA PERSISTENCE] Cấu hình lưu trữ
+    this.STORAGE_KEY = "ALUMASTER_V17_STATE";
+    this.saveTimeout = null;
 
     this.resize();
     this.bindEvents();
@@ -1684,6 +1688,8 @@ export default class Engine {
       grp.splicers += zSplicers;
     });
 
+    this.autoSave(); // [AUTO-SAVE] Lưu sau khi tính toán xong
+
     // --- SECTION 1: PER-ZONE DETAILS ---
     // Build per-zone HTML blocks (restoring the original per-zone breakdown)
     const zoneBlocks = zones.map((zone, idx) => {
@@ -1826,30 +1832,28 @@ export default class Engine {
   //   1. Gửi lệnh sản xuất cho nhà máy cắt
   //   2. Lập bảng tính tổng hợp project
   //   3. Đặt hàng vật tư phụ kiện
-  // [XUẤT CSV] Xuất dữ liệu BOQ ra file Excel - dùng cho shopdrawing
   exportCSV() {
     if (this.state.strips.length === 0) {
       alert("Vui lòng tính toán trước khi xuất!");
       return;
     }
 
-    // [FIX] Smart Export: Nếu BOQ Modal đang mở, lấy dữ liệu chỉnh sửa từ DOM
-    // Nếu không, tính toán lại từ đầu
-    const boqModal = document.getElementById("boqModal");
-    const isModalOpen = boqModal && !boqModal.classList.contains("hidden");
-
-    // [FIX] Define carrierBarL for CSV export
+    // Tính toán dữ liệu BOQ
+    const metrics = this.calculateBOQData();
     const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
 
-    let csv = "\uFEFF"; // BOM
+    let csv = "\uFEFF"; // BOM for Excel UTF-8
 
-    // [HEADER GLOGAL]
+    // [HEADER]
     const projectName = document.getElementById("projectName")?.value || "BOQ";
     const now = new Date();
     const dateStr = now.toISOString().split("T")[0];
 
-    csv += `Dự án,${projectName}\n`;
-    csv += `Ngày xuất,${dateStr}\n\n`;
+    csv += `BÁO CÁO BÓC KHỐI LƯỢNG - TRẦN NHÔM LINEAR\n`;
+    csv += `Tên công trình,${projectName}\n`;
+    csv += `Ngày xuất,${dateStr}\n`;
+    csv += `Hệ số hao hụt,${wastePct}%\n\n`;
 
     // Luôn tính toán data chuẩn để có metrics base (dùng cho carrier, trims...)
     const metrics = this.calculateBOQData();
@@ -1954,6 +1958,126 @@ export default class Engine {
     link.download = `BOQ_${projectName.replace(/\s+/g, "_")}_${dateStr}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+
+    this.showFeedback("Đã xuất file CSV thành công!", "success");
+  }
+
+  // [XUẤT PROJECT CSV] Xuất toàn bộ project (tất cả zones)
+  exportProjectCSV() {
+    const zones = this.state.projectZones || [];
+
+    if (!zones.length) {
+      alert("Chưa có phòng nào trong Project để xuất!");
+      return;
+    }
+
+    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
+    const waste = 1 + wastePct / 100;
+
+    let csv = "\uFEFF"; // BOM
+
+    // [HEADER]
+    const projectName =
+      document.getElementById("projectName")?.value || "Project";
+    const now = new Date();
+    const dateStr = now.toISOString().split("T")[0];
+
+    csv += `BÁO CÁO TỔNG HỢP DỰ ÁN - TRẦN NHÔM LINEAR\n`;
+    csv += `Tên dự án,${projectName}\n`;
+    csv += `Ngày xuất,${dateStr}\n`;
+    csv += `Số phòng,${zones.length}\n`;
+    csv += `Hệ số hao hụt,${wastePct}%\n\n`;
+
+    // [SECTION 1: DANH SÁCH PHÒNG]
+    csv += `=== DANH SÁCH PHÒNG ===\n`;
+    csv += `STT,Tên phòng,Diện tích (m²),Số tấm,Xương (md),Ty treo,V-Góc (md)\n`;
+
+    let totalArea = 0,
+      totalPanels = 0,
+      totalCarrier = 0,
+      totalHanger = 0,
+      totalWallV = 0;
+
+    zones.forEach((zone, i) => {
+      const s = zone.stats || {};
+      const zInputs = zone.savedState?.inputs || {};
+      const zPW = parseFloat(zInputs.cfg_pW) || 100;
+      const zArea = (Number(s.totalLinear || 0) * zPW) / 1000;
+      const panelCount = Array.isArray(s.panels) ? s.panels.length : 0;
+
+      csv += `${i + 1},${zone.name || "Zone " + (i + 1)},${zArea.toFixed(2)},${panelCount},${Number(s.carrierLen || 0).toFixed(2)},${s.hangers || 0},${Number(s.wallV || 0).toFixed(2)}\n`;
+
+      totalArea += zArea;
+      totalPanels += panelCount;
+      totalCarrier += Number(s.carrierLen || 0);
+      totalHanger += Number(s.hangers || 0);
+      totalWallV += Number(s.wallV || 0);
+    });
+
+    csv += `TỔNG CỘNG,,${totalArea.toFixed(2)},${totalPanels},${totalCarrier.toFixed(2)},${totalHanger},${totalWallV.toFixed(2)}\n\n`;
+
+    // [SECTION 2: TỔNG HỢP VẬT TƯ TOÀN DỰ ÁN]
+    csv += `=== TỔNG HỢP VẬT TƯ TOÀN DỰ ÁN ===\n`;
+    csv += `STT,Tên Vật Tư,ĐVT,Số Lượng (Net),Số Lượng (Có hao hụt),Ghi Chú\n`;
+
+    const carrierBars = Math.ceil((totalCarrier * waste) / carrierBarL);
+    const vAngleBars = Math.ceil((totalWallV * waste) / 3.0);
+    const hangerWithWaste = Math.ceil(totalHanger * waste);
+
+    csv += `1,Tấm trần Linear,m²,${totalArea.toFixed(2)},${(totalArea * waste).toFixed(2)},\n`;
+    csv += `2,Thanh xương gài (${carrierBarL}m),Cây,${Math.ceil(totalCarrier / carrierBarL)},${carrierBars},Tổng ${totalCarrier.toFixed(2)} md\n`;
+    csv += `3,Thanh V-Góc (3m),Cây,${Math.ceil(totalWallV / 3)},${vAngleBars},Tổng ${totalWallV.toFixed(2)} md\n`;
+    csv += `4,Ty ren treo trần (3m),Cây,${Math.ceil(totalHanger)},${hangerWithWaste},\n`;
+    csv += `5,Bộ nở đạn + Ecu,Bộ,${totalHanger},${hangerWithWaste},\n`;
+    csv += `6,Móc treo xương,Cái,${totalHanger},${hangerWithWaste},\n`;
+    csv += `7,Khóa nối xương,Cái,${Math.ceil(totalCarrier / carrierBarL)},${carrierBars},\n`;
+    csv += `\n`;
+
+    // [SECTION 3: CHI TIẾT TỪNG PHÒNG]
+    csv += `=== CHI TIẾT TỪNG PHÒNG ===\n\n`;
+
+    zones.forEach((zone, i) => {
+      const s = zone.stats || {};
+      const panels = Array.isArray(s.panels) ? s.panels : [];
+      const zInputs = zone.savedState?.inputs || {};
+      const zPW = parseFloat(zInputs.cfg_pW) || 100;
+
+      csv += `--- PHÒNG ${i + 1}: ${zone.name || "Zone " + (i + 1)} ---\n`;
+      csv += `Loại tấm,${zone.savedState?.presetName || "Custom"} (${zPW}mm)\n`;
+      csv += `Diện tích,${((Number(s.totalLinear || 0) * zPW) / 1000).toFixed(2)} m²\n\n`;
+
+      // Chi tiết cắt tấm
+      if (panels.length > 0) {
+        csv += `Chi tiết cắt tấm:\n`;
+        csv += `Chiều dài (m),Số lượng\n`;
+
+        // Group panels by length
+        const grouped = {};
+        panels.forEach((len) => {
+          const k = Number(len).toFixed(3);
+          grouped[k] = (grouped[k] || 0) + 1;
+        });
+
+        Object.keys(grouped)
+          .sort((a, b) => parseFloat(b) - parseFloat(a))
+          .forEach((len) => {
+            csv += `${len},${grouped[len]}\n`;
+          });
+      }
+      csv += `\n`;
+    });
+
+    // [DOWNLOAD]
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = `PROJECT_${projectName.replace(/\s+/g, "_")}_${dateStr}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    this.showFeedback(`Đã xuất ${zones.length} phòng ra file CSV!`, "success");
   }
 
   // ============ QUẢN LÝ DỰ ÁN (PROJECT MANAGEMENT) ============
@@ -2224,6 +2348,7 @@ export default class Engine {
         : "Đã thêm Zone mới!",
       "success",
     );
+    this.autoSave(); // [AUTO-SAVE] Lưu sau khi thay đổi project
   }
 
   // --- CHỈNH SỬA ZONE (EDIT EXISTING ZONE) ---
@@ -2267,6 +2392,8 @@ export default class Engine {
     // [UPDATE UI]
     this.updateAddButtonUI(); // Cập nhật nút
     this.renderProjectList(); // Vẽ lại danh sách (zone đã xóa sẽ mất)
+
+    this.autoSave(); // [AUTO-SAVE] Lưu sau khi xóa project
   }
 
   // --- VẼ DANH SÁCH PROJECT (RENDER PROJECT LIST UI) ---
@@ -2369,4 +2496,198 @@ export default class Engine {
 
   // ============ KẾT THÚC CLASS ENGINE ============
   // Ghi chú: Hàm distToSeg() đã được import từ utils.js (không define ở đây)
+  // --- DATA PERSISTENCE METHODS ---
+
+  // [AUTO-SAVE] Trigger save with debounce (1s)
+  autoSave() {
+    if (this.saveTimeout) clearTimeout(this.saveTimeout);
+    this.saveTimeout = setTimeout(() => {
+      this.saveState();
+    }, 1000);
+  }
+
+  // [SAVE STATE] Lưu toàn bộ trạng thái vào LocalStorage
+  saveState() {
+    // 1. Capture current working inputs & geometry
+    const currentSnapshot = this.captureState();
+
+    // 2. Build Full State Object
+    const fullState = {
+      version: "17.0",
+      ts: Date.now(),
+      projectZones: this.state.projectZones,
+      currentWork: currentSnapshot, // Trạng thái đang làm dở
+      presets: this.userPresets, // Lưu custom presets
+    };
+
+    // 3. Save to Storage
+    const success = saveToStorage(this.STORAGE_KEY, fullState);
+    if (success) {
+      console.log("💾 Auto-Saved State at " + new Date().toLocaleTimeString());
+    }
+  }
+
+  // [LOAD STATE] Khôi phục trạng thái khi mở app
+  loadState() {
+    const data = loadFromStorage(this.STORAGE_KEY);
+    if (!data) return; // Không có dữ liệu cũ
+
+    console.log("📂 Loading saved state...", data);
+
+    // 1. Restore Project List
+    if (Array.isArray(data.projectZones)) {
+      this.state.projectZones = data.projectZones;
+      this.renderProjectList();
+    }
+
+    // 2. Restore Presets
+    if (Array.isArray(data.presets)) {
+      this.userPresets = data.presets;
+      // Update User Presets in LocalStorage explicitly to sync legacy logic
+      localStorage.setItem("USER_PRESETS", JSON.stringify(this.userPresets));
+      this.updatePresetDropdown();
+      this.renderPresetList();
+    }
+
+    // 3. Restore Current Work (Inputs + Drawing)
+    if (data.currentWork) {
+      this.restoreState(data.currentWork);
+      this.showFeedback("Đã khôi phục phiên làm việc cũ", "info");
+    }
+  }
+
+  // --- PROJECT FILE MANAGEMENT ---
+
+  // [EXPORT PROJECT] Xuất toàn bộ dự án ra file JSON
+  exportProject() {
+    // Build export data
+    const exportData = {
+      version: "17.0",
+      exportedAt: new Date().toISOString(),
+      projectZones: this.state.projectZones,
+      currentWork: this.captureState(),
+      presets: this.userPresets,
+    };
+
+    // Create JSON blob
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    // Create download link
+    const link = document.createElement("a");
+    const projectName =
+      document.getElementById("projectName")?.value || "AluMaster_Project";
+    const dateStr = new Date().toISOString().split("T")[0];
+    link.href = url;
+    link.download = `${projectName.replace(/\s+/g, "_")}_${dateStr}.json`;
+    link.click();
+
+    URL.revokeObjectURL(url);
+    this.showFeedback("Đã xuất dự án ra file JSON!", "success");
+  }
+
+  // [NEW PROJECT] Tạo dự án mới (xóa tất cả dữ liệu)
+  newProject() {
+    // Confirm before deleting
+    const zoneCount = this.state.projectZones.length;
+    const confirmMsg =
+      zoneCount > 0
+        ? `⚠️ Bạn có ${zoneCount} phòng đã lưu.\n\nTẠO DỰ ÁN MỚI sẽ XÓA TẤT CẢ dữ liệu hiện tại.\n\nBạn có chắc chắn muốn tiếp tục?`
+        : "Tạo dự án mới và xóa dữ liệu hiện tại?";
+
+    if (!confirm(confirmMsg)) {
+      this.showFeedback("Đã hủy tạo dự án mới", "info");
+      return;
+    }
+
+    // Clear all data
+    this.state.projectZones = [];
+    this.state.points = [];
+    this.state.strips = [];
+    this.state.edges = [];
+    this.state.carriers = [];
+    this.state.hangers = [];
+    this.state.editingIndex = null;
+
+    // Reset inputs to defaults
+    document.getElementById("projectName").value = "";
+    document.getElementById("dim_L").value = "10.0";
+    document.getElementById("dim_W").value = "6.0";
+    document.getElementById("shp_type").value = "R";
+
+    // Clear localStorage
+    localStorage.removeItem(this.STORAGE_KEY);
+
+    // Re-initialize
+    this.switchMode("PRESET");
+    this.renderProjectList();
+    this.showFeedback("Đã tạo dự án mới!", "success");
+  }
+
+  // [LOAD PROJECT] Tải dự án từ file JSON
+  loadProject(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+
+        // Validate structure
+        if (!data.version || !Array.isArray(data.projectZones)) {
+          throw new Error("File không hợp lệ");
+        }
+
+        // Confirm if existing data
+        if (this.state.projectZones.length > 0) {
+          if (
+            !confirm(
+              `⚠️ Bạn có ${this.state.projectZones.length} phòng hiện tại.\n\nTẢI FILE MỚI sẽ GHI ĐÈ tất cả.\n\nTiếp tục?`,
+            )
+          ) {
+            this.showFeedback("Đã hủy tải file", "info");
+            event.target.value = ""; // Reset input
+            return;
+          }
+        }
+
+        // Load data
+        this.state.projectZones = data.projectZones;
+        this.renderProjectList();
+
+        // Load presets if available
+        if (Array.isArray(data.presets)) {
+          this.userPresets = data.presets;
+          localStorage.setItem(
+            "USER_PRESETS",
+            JSON.stringify(this.userPresets),
+          );
+          this.updatePresetDropdown();
+        }
+
+        // Load current work if available
+        if (data.currentWork) {
+          this.restoreState(data.currentWork);
+        }
+
+        // Save to localStorage
+        this.saveState();
+
+        this.showFeedback(
+          `Đã tải ${data.projectZones.length} phòng từ file!`,
+          "success",
+        );
+      } catch (err) {
+        console.error("Load project error:", err);
+        this.showFeedback("Lỗi đọc file: " + err.message, "error");
+      }
+
+      // Reset input for next load
+      event.target.value = "";
+    };
+
+    reader.readAsText(file);
+  }
 }
