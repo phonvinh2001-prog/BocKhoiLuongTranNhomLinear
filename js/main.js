@@ -7,22 +7,44 @@ import VisualOverlay from "./VisualOverlay.js";
 console.log("🏗️ System Init: Loading ALU-MASTER v17 Modules...");
 
 // 2. Khởi tạo bộ máy tính toán (Core Engine)
-const app = new Engine();
+// 2. Khởi tạo bộ máy tính toán (Core Engine)
+let app;
+try {
+  app = new Engine();
+} catch (error) {
+  console.error("🔥 CRITICAL: Engine Initialization Failed!", error);
+  alert(
+    "Lỗi khởi động: " +
+      error.message +
+      "\nVui lòng checked console (F12) để biết chi tiết.",
+  );
+}
 
 // 3. Khởi tạo công cụ giám sát (Extension)
-setTimeout(() => {
-  // Render Icons
-  if (window.lucide) {
-    window.lucide.createIcons();
-    console.log("🎨 UI Icons: Rendered.");
-  }
+if (app) {
+  setTimeout(() => {
+    // Render Icons
+    if (window.lucide) {
+      window.lucide.createIcons();
+      console.log("🎨 UI Icons: Rendered.");
+    }
 
-  window.overlayExtension = new VisualOverlay(app);
-  console.log("✅ Module Overlay: Ready.");
+    try {
+      window.overlayExtension = new VisualOverlay(app);
+      console.log("✅ Module Overlay: Ready.");
+    } catch (e) {
+      console.error("⚠️ Overlay Init Failed:", e);
+    }
 
-  // [DATA PERSISTENCE] Khôi phục dữ liệu cũ
-  app.loadState();
-}, 200);
+    // [DATA PERSISTENCE] Khôi phục dữ liệu cũ
+    app.loadState();
+  }, 200);
+}
 
 // --- QUAN TRỌNG: GÁN VÀO WINDOW ---
-window.app = app;
+if (app) {
+  window.app = app;
+  // Hide Loader
+  const loader = document.getElementById("app-loader");
+  if (loader) loader.style.display = "none";
+}

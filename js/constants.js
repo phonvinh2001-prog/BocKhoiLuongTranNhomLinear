@@ -20,7 +20,7 @@ export const EDGE_TYPES = {
   // [CODE] "W-V25" = Wall V-angle 25mm, dùng cho lệnh sản xuất
   WALL_V: {
     id: 0, // [ID] Mã số định danh (0)
-    color: "#D32F2F", // [MÀU] Đỏ - phân biệt loại viền trên canvas
+    color: "#da1e28", // [MÀU] Đỏ - phân biệt loại viền trên canvas
     name: "V-Góc 25x25", // [TÊN] Tiêu chuẩn: thanh V-Góc size 25mm x 25mm
     code: "W-V25", // [CODE] Mã lệnh cho nhà máy cắt (Wall V-angle 25)
   },
@@ -31,7 +31,7 @@ export const EDGE_TYPES = {
   // [CODE] "W-Z15" = Wall Z-profile 15mm, dùng cho lệnh sản xuất
   SHADOW: {
     id: 1, // [ID] Mã số định danh (1)
-    color: "#7B1FA2", // [MÀU] Tím - phân biệt loại viền trên canvas
+    color: "#8a3ffc", // [MÀU] Tím - phân biệt loại viền trên canvas
     name: "Shadow Gap (Z)", // [TÊN] Thanh Z-profile (che khe) 15mm
     code: "W-Z15", // [CODE] Mã lệnh cho nhà máy cắt (Wall Z-profile 15)
   },
@@ -43,11 +43,10 @@ export const EDGE_TYPES = {
   // [CODE] "F-OPEN" = Fascia Open (không che), dùng cho lệnh sản xuất
   FASCIA: {
     id: 2, // [ID] Mã số định danh (2)
-    color: "#0288D1", // [MÀU] Xanh - phân biệt loại viền trên canvas
+    color: "#0043ce", // [MÀU] Xanh - phân biệt loại viền trên canvas
     name: "Fascia/Kính (Hở)", // [TÊN] Tấm mặt dựng (kính hoặc composite)
     code: "F-OPEN", // [CODE] Mã lệnh cho nhà máy cắt (Fascia Open)
   },
-
 
   // [VIỀN 4] NONE - Không lắp viền
   // [THI CÔNG] Cạnh tường này không lắp viền (tiết kiệm chi phí)

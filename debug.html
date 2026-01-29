@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Chẩn đoán Lỗi (Debug)</title>
+    <style>
+      body {
+        font-family: monospace;
+        padding: 20px;
+        background: #f0f0f0;
+      }
+      .log {
+        background: #fff;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        border-left: 5px solid #ccc;
+      }
+      .error {
+        border-left-color: #d32f2f;
+        color: #d32f2f;
+      }
+      .success {
+        border-left-color: #2e7d32;
+        color: #2e7d32;
+      }
+      .warn {
+        border-left-color: #f57c00;
+        color: #f57c00;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🛠️ Công cụ Chẩn đoán Sự cố</h1>
+    <div id="results"></div>
+
+    <script>
+      function log(msg, type = "info") {
+        const div = document.createElement("div");
+        div.className = `log ${type}`;
+        div.innerHTML = `<strong>[${type.toUpperCase()}]</strong> ${msg}`;
+        document.getElementById("results").appendChild(div);
+      }
+
+      // 1. Kiểm tra Giao thức (Protocol Check)
+      const protocol = window.location.protocol;
+      log(`Giao thức hiện tại: ${protocol}`);
+
+      if (protocol === "file:") {
+        log("⚠️ CẢNH BÁO: Bạn đang chạy file trực tiếp (file://).", "warn");
+        log(
+          "❌ Trình duyệt sẽ CHẶN các file JavaScript dạng Module (import/export) vì lý do bảo mật (CORS policy).",
+          "error",
+        );
+        log(
+          "👉 GIẢI PHÁP: Bạn cần chạy qua Local Server (http://localhost...)",
+          "info",
+        );
+      } else {
+        log("✅ Giao thức HTTP/HTTPS hợp lệ.", "success");
+      }
+
+      // 2. Kiểm tra Module Support
+      log("Đang thử tải module test...", "info");
+    </script>
+
+    <script type="module">
+      import * as constants from "./js/constants.js";
+
+      const div = document.createElement("div");
+      div.className = "log success";
+      div.innerHTML =
+        "<strong>[SUCCESS]</strong> Module đã tải thành công! (Code JS không bị lỗi cú pháp)";
+      document.getElementById("results").appendChild(div);
+
+      if (constants.CONSTRUCTION_STD) {
+        div.innerHTML += "<br>✅ Đọc được dữ liệu từ constants.js";
+      }
+    </script>
+
+    <script>
+      window.addEventListener("error", function (e) {
+        log(
+          `Lỗi Script toàn cục: ${e.message} (File: ${e.filename}, Line: ${e.lineno})`,
+          "error",
+        );
+      });
+    </script>
+  </body>
+</html>

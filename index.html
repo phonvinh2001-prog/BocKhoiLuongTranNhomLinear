@@ -14,6 +14,62 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
   </head>
   <body>
     <!-- [LAYOUT] Sidebar + Viewport -->
+    <div
+      id="app-loader"
+      style="
+        position: fixed;
+        inset: 0;
+        background: white;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        color: #333;
+      "
+    >
+      <div style="font-size: 24px; font-weight: bold; margin-bottom: 10px">
+        ⏳ Loading ALU-MASTER...
+      </div>
+      <div style="font-size: 14px; color: #666">
+        Initializing Core Engine...
+      </div>
+      <div
+        id="loader-error"
+        style="
+          color: red;
+          margin-top: 20px;
+          text-align: center;
+          display: none;
+          padding: 20px;
+          border: 1px solid red;
+          background: #fff0f0;
+        "
+      ></div>
+      <script>
+        // Global Error Handler for Loader
+        window.onerror = function (msg, url, line) {
+          const el = document.getElementById("loader-error");
+          if (el) {
+            el.style.display = "block";
+            el.innerHTML += `<strong>🔥 Error:</strong> ${msg}<br>File: ${url}:${line}<br><hr>`;
+          }
+        };
+        // Safety timeout
+        setTimeout(() => {
+          const el = document.getElementById("loader-error");
+          if (
+            document.getElementById("app-loader") &&
+            el &&
+            el.style.display === "none"
+          ) {
+            el.style.display = "block";
+            el.innerHTML =
+              "⚠️ <strong>Timeout Warning:</strong> App đang tải quá lâu.<br>Có thể do lỗi mạng hoặc Script không chạy.<br>Hãy thử Refresh (F5) hoặc kiểm tra Console (F12).";
+          }
+        }, 5000);
+      </script>
+    </div>
     <div class="sidebar">
       <!-- [HEADER] -->
       <div class="header">
@@ -493,6 +549,6 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
       </div>
     </div>
 
-    <script type="module" src="js/main.js"></script>
+    <script type="module" src="js/main.js?v=20240129_0926"></script>
   </body>
 </html>

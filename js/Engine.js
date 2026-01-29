@@ -195,11 +195,46 @@ export default class Engine {
       e.preventDefault();
       if (this.state.mode === "DRAW") this.finishDraw();
     };
+
+    // [FIX] BIND UI EVENTS DIRECTLY (REMOVE RELIANCE ON WINDOW.APP)
+    // 1. Buttons
+    this.bindClick("btn_calc", () => this.calculate());
+    this.bindClick("btn_boq", () => this.showBOQ());
+    this.bindClick("btn_project_boq", () => this.showProjectBOQ());
+    this.bindClick("btn_addProject", () => this.addToProject());
+    this.bindClick("btn_tab_preset", () => this.switchMode("PRESET"));
+    this.bindClick("btn_tab_free", () => this.switchMode("FREE"));
+
+    // 2. Preset UI
+    this.bindChange("shp_type", () => this.preset());
+    this.bindChange("l_orient", () => this.preset());
+    this.bindChange("u_orient", () => this.preset());
+    this.bindChange("dim_L", () => this.preset());
+    this.bindChange("dim_W", () => this.preset());
+    this.bindChange("dim_Lc", () => this.preset());
+    this.bindChange("dim_Wc", () => this.preset());
+    this.bindChange("dim_u_arm_1", () => this.preset());
+    this.bindChange("dim_u_arm_2", () => this.preset());
+    this.bindChange("dim_u_base", () => this.preset());
+
+    // 3. Config UI
+    this.bindChange("cfg_preset", () => this.applyPreset());
+    this.bindChange("cfg_dir", () => this.calculate());
+  }
+
+  // [HELPER] Safe Binding
+  bindClick(id, fn) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("click", fn);
+  }
+  bindChange(id, fn) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", fn);
   }
 
   loadPresets() {
-    // [FIX] Sync LocalStorage key to uppercase USER_PRESETS
-    let presets = JSON.parse(localStorage.getItem("USER_PRESETS"));
+    // [FIX] Use safe loadFromStorage wrapper
+    let presets = loadFromStorage("USER_PRESETS");
     if (!presets) {
       // Khởi tạo danh sách mặc định
       presets = [
@@ -207,7 +242,7 @@ export default class Engine {
         { name: "U-Baffle", pW: 200, gW: 50, maxL: 4.0, color: "#FFF3E0" },
         { name: "G200", pW: 200, gW: 20, maxL: 6.0, color: "#F3E5F5" },
       ];
-      localStorage.setItem("USER_PRESETS", JSON.stringify(presets));
+      saveToStorage("USER_PRESETS", presets);
     }
     this.userPresets = presets;
     this.updatePresetDropdown();
@@ -258,8 +293,8 @@ export default class Engine {
 
   deletePreset(idx) {
     this.userPresets.splice(idx, 1);
-    // [FIX] Use USER_PRESETS key
-    localStorage.setItem("USER_PRESETS", JSON.stringify(this.userPresets));
+    // [FIX] Use safe saveToStorage wrapper
+    saveToStorage("USER_PRESETS", this.userPresets);
     this.updatePresetDropdown();
     this.renderPresetList();
   }
@@ -273,8 +308,8 @@ export default class Engine {
     if (name && !isNaN(pW) && !isNaN(gW) && !isNaN(maxL)) {
       const preset = { name, pW, gW, maxL, color };
       this.userPresets.push(preset);
-      // [FIX] Use USER_PRESETS key
-      localStorage.setItem("USER_PRESETS", JSON.stringify(this.userPresets));
+      // [FIX] Use safe saveToStorage wrapper
+      saveToStorage("USER_PRESETS", this.userPresets);
       this.updatePresetDropdown();
       this.renderPresetList();
       // [FIX] Use classList to hide modal
@@ -1856,7 +1891,13 @@ export default class Engine {
     csv += `Hệ số hao hụt,${wastePct}%\n\n`;
 
     // Luôn tính toán data chuẩn để có metrics base (dùng cho carrier, trims...)
-    const metrics = this.calculateBOQData();
+    // [REMOVED] Redundant recalculation causing SyntaxError
+    // const metrics = this.calculateBOQData();
+
+    // [FIX] Define isModalOpen based on DOM state
+    const isModalOpen = !document
+      .getElementById("boqModal")
+      .classList.contains("hidden");
 
     if (isModalOpen) {
       // --- MODE 1: EXPORT WHAT YOU SEE (FROM DOM) ---
@@ -2544,7 +2585,7 @@ export default class Engine {
     if (Array.isArray(data.presets)) {
       this.userPresets = data.presets;
       // Update User Presets in LocalStorage explicitly to sync legacy logic
-      localStorage.setItem("USER_PRESETS", JSON.stringify(this.userPresets));
+      saveToStorage("USER_PRESETS", this.userPresets);
       this.updatePresetDropdown();
       this.renderPresetList();
     }
@@ -2660,10 +2701,8 @@ export default class Engine {
         // Load presets if available
         if (Array.isArray(data.presets)) {
           this.userPresets = data.presets;
-          localStorage.setItem(
-            "USER_PRESETS",
-            JSON.stringify(this.userPresets),
-          );
+          this.userPresets = data.presets;
+          saveToStorage("USER_PRESETS", this.userPresets);
           this.updatePresetDropdown();
         }
 
