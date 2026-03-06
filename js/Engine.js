@@ -28,6 +28,7 @@ Quy ước màu & trạng thái:
 import { EDGE_TYPES, CONSTRUCTION_STD } from "./constants.js"; // Nhập định nghĩa vật tư
 import { distToSeg, saveToStorage, loadFromStorage } from "./utils.js"; // Nhập công cụ tính toán & storage
 import PreviewRenderer from "./PreviewRenderer.js"; // Nhập renderer cho preview panel
+import GeometryHelper from "./GeometryHelper.js"; // Nhập helper hình học
 
 // 2. XUẤT CLASS ĐỂ MAIN.JS CÓ THỂ DÙNG
 export default class Engine {
@@ -62,6 +63,9 @@ export default class Engine {
     // [DATA PERSISTENCE] Cấu hình lưu trữ
     this.STORAGE_KEY = "ALUMASTER_V17_STATE";
     this.saveTimeout = null;
+
+    // [HIỆU NĂNG] Cấu hình vẽ bằng requestAnimationFrame
+    this._isDrawing = false;
 
     this.resize();
     this.bindEvents();
@@ -104,51 +108,6 @@ export default class Engine {
     console.log(`[${type.toUpperCase()}] ${message}`);
   }
 
-  // [HELPER] Lấy giá trị input an toàn với validation
-  // [FIX #1] Thêm NaN handling và UI feedback
-  getInputValue(id, min = 0, max = Infinity, fallback = 0, showError = false) {
-    const el = document.getElementById(id);
-    if (!el) return fallback;
-
-    let val = parseFloat(el.value);
-
-    // [FIX #1] NaN handling với UI feedback
-    if (isNaN(val) || el.value.trim() === "") {
-      if (showError) {
-        el.classList.add("error");
-        console.warn(
-          `⚠️ Input "${id}" không hợp lệ, sử dụng giá trị mặc định ${fallback}`,
-        );
-      }
-      return fallback;
-    }
-
-    // Remove error class if value is valid
-    el.classList.remove("error", "warning");
-
-    // [FIX #3] Bounds checking
-    if (val < min) {
-      if (showError) {
-        el.classList.add("warning");
-        console.warn(
-          `⚠️ Input "${id}" quá nhỏ (${val} < ${min}), sử dụng min ${min}`,
-        );
-      }
-      return min;
-    }
-    if (val > max) {
-      if (showError) {
-        el.classList.add("warning");
-        console.warn(
-          `⚠️ Input "${id}" quá lớn (${val} > ${max}), sử dụng max ${max}`,
-        );
-      }
-      return max;
-    }
-
-    return val;
-  }
-
   // [CHUYỂN ĐỔI CHẾ ĐỘ] PRESET (hình mẫu) ↔ FREE (vẽ tự do)
   switchMode(mode) {
     this.state.inputMode = mode;
@@ -168,13 +127,13 @@ export default class Engine {
     // 2. Xử lý Logic
     if (mode === "PRESET") {
       this.state.mode = "IDLE"; // Thoát chế độ vẽ nếu đang vẽ dở
-      this.preset(); // Load lại hình chữ nhật/L
+      this.preset(); 
     } else {
       // Chuyển sang Free: Xóa hình cũ để người dùng vẽ mới (hoặc giữ nguyên tùy bạn)
       this.state.points = [];
       this.state.strips = [];
       this.state.edges = [];
-      this.draw();
+      this.scheduleDraw();
       // Tự động kích hoạt vẽ luôn cho tiện
       this.resetDraw();
     }
@@ -189,7 +148,7 @@ export default class Engine {
       e.preventDefault();
       const z = e.deltaY > 0 ? 0.9 : 1.1;
       this.state.scale *= z;
-      this.draw();
+      this.scheduleDraw();
     };
     this.cont.oncontextmenu = (e) => {
       e.preventDefault();
@@ -297,7 +256,7 @@ export default class Engine {
   resize() {
     this.cvs.width = this.cont.clientWidth;
     this.cvs.height = this.cont.clientHeight;
-    this.draw();
+    this.scheduleDraw();
   }
 
   // --- XỬ LÝ HÌNH HỌC & INPUT (GEOMETRY) ---
@@ -306,11 +265,11 @@ export default class Engine {
     if (this.state.inputMode === "FREE") return;
     const type = document.getElementById("shp_type").value;
 
-    // [FIX #1] Use getInputValue for safe NaN handling
-    const L = this.getInputValue("dim_L", 0.2, 1000, 10.0, true);
-    const W = this.getInputValue("dim_W", 0.2, 1000, 6.0, true);
+    // [FIX #1] Use GeometryHelper for safe input
+    const L = GeometryHelper.getInputValue("dim_L", 0.2, 1000, 10.0, true);
+    const W = GeometryHelper.getInputValue("dim_W", 0.2, 1000, 6.0, true);
 
-    // [FIX] Replace style.display with classList to override CSS !important
+    // [FIX] Replace style.display with classList
     const lOptsEl = document.getElementById("L_opts");
     const uOptsEl = document.getElementById("U_opts");
 
@@ -326,185 +285,35 @@ export default class Engine {
     }
 
     let pts = [];
-    if (type === "R")
+    if (type === "R") {
       pts = [
         { x: 0, y: 0 },
         { x: L, y: 0 },
         { x: L, y: W },
         { x: 0, y: W },
       ];
-    else if (type === "L") {
-      // [FIX #1 #3] Safe input with bounds validation
-      const Lc = this.getInputValue(
-        "dim_Lc",
-        0.1,
-        L - 0.1,
-        Math.min(4.0, L - 0.1),
-        true,
-      );
-      const Wc = this.getInputValue(
-        "dim_Wc",
-        0.1,
-        W - 0.1,
-        Math.min(2.5, W - 0.1),
-        true,
-      );
-      const lOrient =
-        document.getElementById("l_orient")?.value || "BOTTOM_RIGHT";
-
-      // [SỬA LỖI] Hổ trợ 4 hướng cắt góc cho hình L
-      switch (lOrient) {
-        case "BOTTOM_RIGHT": // Cắt góc phải-dưới (mặc định - hiện tại)
-          pts = [
-            { x: 0, y: 0 },
-            { x: L, y: 0 },
-            { x: L, y: W - Wc },
-            { x: L - Lc, y: W - Wc },
-            { x: L - Lc, y: W },
-            { x: 0, y: W },
-          ];
-          break;
-        case "BOTTOM_LEFT": // Cắt góc trái-dưới
-          pts = [
-            { x: 0, y: 0 },
-            { x: L, y: 0 },
-            { x: L, y: W },
-            { x: Lc, y: W },
-            { x: Lc, y: W - Wc },
-            { x: 0, y: W - Wc },
-          ];
-          break;
-        case "TOP_RIGHT": // Cắt góc phải-trên
-          pts = [
-            { x: 0, y: 0 },
-            { x: L - Lc, y: 0 },
-            { x: L - Lc, y: Wc },
-            { x: L, y: Wc },
-            { x: L, y: W },
-            { x: 0, y: W },
-          ];
-          break;
-        case "TOP_LEFT": // Cắt góc trái-trên
-          pts = [
-            { x: Lc, y: 0 },
-            { x: L, y: 0 },
-            { x: L, y: W },
-            { x: 0, y: W },
-            { x: 0, y: Wc },
-            { x: Lc, y: Wc },
-          ];
-          break;
-        default:
-          // Fallback về BOTTOM_RIGHT nếu invalid
-          pts = [
-            { x: 0, y: 0 },
-            { x: L, y: 0 },
-            { x: L, y: W - Wc },
-            { x: L - Lc, y: W - Wc },
-            { x: L - Lc, y: W },
-            { x: 0, y: W },
-          ];
-      }
+    } else if (type === "L") {
+      const Lc = GeometryHelper.getInputValue("dim_Lc", 0.1, L - 0.1, Math.min(4.0, L - 0.1), true);
+      const Wc = GeometryHelper.getInputValue("dim_Wc", 0.1, W - 0.1, Math.min(2.5, W - 0.1), true);
+      const lOrient = document.getElementById("l_orient")?.value || "BOTTOM_RIGHT";
+      pts = GeometryHelper.generateLShape(L, W, Lc, Wc, lOrient);
     } else if (type === "U") {
-      // [FIX #1] Safe input handling
-      const arm1 = this.getInputValue("dim_u_arm_1", 0.1, L - 0.1, 2.0, true);
-      const arm2 = this.getInputValue("dim_u_arm_2", 0.1, L - 0.1, 2.0, true);
-      const base = this.getInputValue("dim_u_base", 0.1, W - 0.1, 2.0, true);
+      const arm1 = GeometryHelper.getInputValue("dim_u_arm_1", 0.1, L - 0.1, 2.0, true);
+      const arm2 = GeometryHelper.getInputValue("dim_u_arm_2", 0.1, L - 0.1, 2.0, true);
+      const base = GeometryHelper.getInputValue("dim_u_base", 0.1, W - 0.1, 2.0, true);
       const orient = document.getElementById("u_orient").value;
-      if (
-        isNaN(arm1) ||
-        isNaN(arm2) ||
-        isNaN(base) ||
-        !["TOP", "BOTTOM", "LEFT", "RIGHT"].includes(orient)
-      ) {
-        console.warn(
-          "Kích thước hoặc hướng chữ U không hợp lệ. Fallback về chữ nhật.",
-        );
-        pts = [
-          { x: 0, y: 0 },
-          { x: L, y: 0 },
-          { x: L, y: W },
-          { x: 0, y: W },
-        ];
-      } else if (
-        (orient === "TOP" || orient === "BOTTOM") &&
-        (arm1 + arm2 >= L || base >= W)
-      ) {
-        console.warn(
-          "Kích thước chữ U không hợp lệ: arm1 + arm2 >= L hoặc base >= W cho hướng ngang. Fallback về chữ nhật.",
-        );
-        pts = [
-          { x: 0, y: 0 },
-          { x: L, y: 0 },
-          { x: L, y: W },
-          { x: 0, y: W },
-        ];
-      } else if (
-        (orient === "LEFT" || orient === "RIGHT") &&
-        (arm1 + arm2 >= W || base >= L)
-      ) {
-        console.warn(
-          "Kích thước chữ U không hợp lệ: arm1 + arm2 >= W hoặc base >= L cho hướng dọc. Fallback về chữ nhật.",
-        );
-        pts = [
-          { x: 0, y: 0 },
-          { x: L, y: 0 },
-          { x: L, y: W },
-          { x: 0, y: W },
-        ];
-      } else {
-        // [SỬA LỖI] Logic tọa độ hình U chuẩn (8 điểm - Counter Clockwise)
 
-        if (orient === "TOP") {
-          // Mở trên (Top open) -> Đáy (base) nằm dưới cùng (y = W)
-          // 2 Cánh (arms) nằm 2 bên trái phải
-          pts = [
-            { x: 0, y: 0 }, // 1. Góc trên trái
-            { x: 0, y: W }, // 2. Góc dưới trái
-            { x: L, y: W }, // 3. Góc dưới phải
-            { x: L, y: 0 }, // 4. Góc trên phải
-            { x: L - arm2, y: 0 }, // 5. Mép trong cánh phải
-            { x: L - arm2, y: W - base }, // 6. Góc trong dưới phải
-            { x: arm1, y: W - base }, // 7. Góc trong dưới trái
-            { x: arm1, y: 0 }, // 8. Mép trong cánh trái
-          ];
-        } else if (orient === "BOTTOM") {
-          // Mở dưới (Bottom open) -> Đáy (base) nằm trên cùng (y = 0)
-          pts = [
-            { x: 0, y: 0 }, // 1. Góc trên trái
-            { x: 0, y: W }, // 2. Góc dưới trái
-            { x: arm1, y: W }, // 3. Mép trong cánh trái
-            { x: arm1, y: base }, // 4. Góc trong trên trái
-            { x: L - arm2, y: base }, // 5. Góc trong trên phải
-            { x: L - arm2, y: W }, // 6. Mép trong cánh phải
-            { x: L, y: W }, // 7. Góc dưới phải
-            { x: L, y: 0 }, // 8. Góc trên phải
-          ];
-        } else if (orient === "LEFT") {
-          // Mở trái (Left open) -> Đáy (base) nằm bên phải (x = L)
-          pts = [
-            { x: 0, y: 0 }, // 1. Góc trên trái
-            { x: 0, y: arm1 }, // 2. Mép trong cánh trên
-            { x: L - base, y: arm1 }, // 3. Góc trong trên phải
-            { x: L - base, y: W - arm2 }, // 4. Góc trong dưới phải
-            { x: 0, y: W - arm2 }, // 5. Mép trong cánh dưới
-            { x: 0, y: W }, // 6. Góc dưới trái
-            { x: L, y: W }, // 7. Góc dưới phải
-            { x: L, y: 0 }, // 8. Góc trên phải
-          ];
-        } else if (orient === "RIGHT") {
-          // Mở phải (Right open) -> Đáy (base) nằm bên trái (x = 0)
-          pts = [
-            { x: 0, y: 0 }, // 1. Góc trên trái
-            { x: 0, y: W }, // 2. Góc dưới trái
-            { x: L, y: W }, // 3. Góc dưới phải
-            { x: L, y: W - arm2 }, // 4. Mép trong cánh dưới
-            { x: base, y: W - arm2 }, // 5. Góc trong dưới trái
-            { x: base, y: arm1 }, // 6. Góc trong trên trái
-            { x: L, y: arm1 }, // 7. Mép trong cánh trên
-            { x: L, y: 0 }, // 8. Góc trên phải
-          ];
-        }
+      if (isNaN(arm1) || isNaN(arm2) || isNaN(base) || !["TOP", "BOTTOM", "LEFT", "RIGHT"].includes(orient)) {
+         console.warn("Kích thước hoặc hướng chữ U không hợp lệ. Fallback về chữ nhật.");
+         pts = [ { x: 0, y: 0 }, { x: L, y: 0 }, { x: L, y: W }, { x: 0, y: W } ];
+      } else if ((orient === "TOP" || orient === "BOTTOM") && (arm1 + arm2 >= L || base >= W)) {
+         console.warn("Kích thước chữ U không hợp lệ (hướng ngang). Fallback về chữ nhật.");
+         pts = [ { x: 0, y: 0 }, { x: L, y: 0 }, { x: L, y: W }, { x: 0, y: W } ];
+      } else if ((orient === "LEFT" || orient === "RIGHT") && (arm1 + arm2 >= W || base >= L)) {
+         console.warn("Kích thước chữ U không hợp lệ (hướng dọc). Fallback về chữ nhật.");
+         pts = [ { x: 0, y: 0 }, { x: L, y: 0 }, { x: L, y: W }, { x: 0, y: W } ];
+      } else {
+         pts = GeometryHelper.generateUShape(L, W, arm1, arm2, base, orient);
       }
     }
 
@@ -552,21 +361,21 @@ export default class Engine {
     const warnings = [];
 
     if (shapeType === "L") {
-      const L = this.getInputValue("dim_L", 0, 1000, 10.0);
-      const W = this.getInputValue("dim_W", 0, 1000, 6.0);
-      const Lc = this.getInputValue("dim_Lc", 0, 1000, 0);
-      const Wc = this.getInputValue("dim_Wc", 0, 1000, 0);
+      const L = GeometryHelper.getInputValue("dim_L", 0, 1000, 10.0);
+      const W = GeometryHelper.getInputValue("dim_W", 0, 1000, 6.0);
+      const Lc = GeometryHelper.getInputValue("dim_Lc", 0, 1000, 0);
+      const Wc = GeometryHelper.getInputValue("dim_Wc", 0, 1000, 0);
 
       if (Lc >= L) errors.push("Cắt dài phải < Chiều dài");
       if (Wc >= W) errors.push("Cắt rộng phải < Chiều rộng");
       if (Lc < 0.2) warnings.push("Cắt dài nhỏ (<0.2m)");
       if (Wc < 0.2) warnings.push("Cắt rộng nhỏ (<0.2m)");
     } else if (shapeType === "U") {
-      const L = this.getInputValue("dim_L", 0, 1000, 10.0);
-      const W = this.getInputValue("dim_W", 0, 1000, 6.0);
-      const arm1 = this.getInputValue("dim_u_arm_1", 0, 1000, 0);
-      const arm2 = this.getInputValue("dim_u_arm_2", 0, 1000, 0);
-      const base = this.getInputValue("dim_u_base", 0, 1000, 0);
+      const L = GeometryHelper.getInputValue("dim_L", 0, 1000, 10.0);
+      const W = GeometryHelper.getInputValue("dim_W", 0, 1000, 6.0);
+      const arm1 = GeometryHelper.getInputValue("dim_u_arm_1", 0, 1000, 0);
+      const arm2 = GeometryHelper.getInputValue("dim_u_arm_2", 0, 1000, 0);
+      const base = GeometryHelper.getInputValue("dim_u_base", 0, 1000, 0);
       const orient = document.getElementById("u_orient").value;
 
       if (orient === "TOP" || orient === "BOTTOM") {
@@ -587,7 +396,7 @@ export default class Engine {
     this.state.mode = "DRAW";
     document.getElementById("coords").innerText =
       "Chế độ Vẽ: Click trái thêm điểm, Chuột phải để đóng hình.";
-    this.draw();
+    this.scheduleDraw();
   }
 
   finishDraw() {
@@ -643,7 +452,7 @@ export default class Engine {
           Math.round(m.y * CONSTRUCTION_STD.DRAWING_PRECISION) /
           CONSTRUCTION_STD.DRAWING_PRECISION,
       });
-      this.draw(); // Vẽ lại canvas
+      this.scheduleDraw(); // Vẽ lại canvas
     }
     // [CHẾ ĐỘ IDLE] Xem/Chỉnh sửa
     else if (this.state.mode === "IDLE" && e.button === 0) {
@@ -688,7 +497,7 @@ export default class Engine {
       this.state.panX += e.clientX - this.state.lastM.x; // Dịch chuyển X
       this.state.panY += e.clientY - this.state.lastM.y; // Dịch chuyển Y
       this.state.lastM = { x: e.clientX, y: e.clientY }; // Cập nhật vị trí chuột
-      this.draw(); // Vẽ lại canvas với pan mới
+      this.scheduleDraw(); // Vẽ lại canvas với pan mới
     }
 
     // [HIỂN THỊ TỌA ĐỘ] Nếu ở chế độ DRAW → hiển thị tọa độ chuột
@@ -769,17 +578,16 @@ export default class Engine {
     this.state.shapeType = this.detectShapeType();
 
     // [BƯỚC 1] ĐỌC THÔNG SỐ TỪ UI (Tất cả đơn vị mm → convert m)
-    // [BƯỚC 1] ĐỌC THÔNG SỐ TỪ UI (Tất cả đơn vị mm → convert m)
     // [FIX] Validate inputs to prevent NaN/Zero errors - Critical Check
-    const pW_mm = this.getInputValue("cfg_pW", 10, 1000, 100, true);
+    const pW_mm = GeometryHelper.getInputValue("cfg_pW", 10, 1000, 100, true);
     if (!pW_mm || pW_mm <= 0)
       return this.showFeedback("Lỗi: Bản rộng tấm không hợp lệ!", "error");
 
     const pW = pW_mm / 1000; // Bản rộng tấm (m)
-    const gW = this.getInputValue("cfg_gW", 0, 500, 0, true) / 1000; // Khe hở giữa tấm (m)
-    const wGap = this.getInputValue("cfg_wGap", 0, 500, 0, true) / 1000; // Khe hở tường (m)
+    const gW = GeometryHelper.getInputValue("cfg_gW", 0, 500, 0, true) / 1000; // Khe hở giữa tấm (m)
+    const wGap = GeometryHelper.getInputValue("cfg_wGap", 0, 500, 0, true) / 1000; // Khe hở tường (m)
 
-    const maxL = this.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true); // Chiều dài nhôm tối đa (m)
+    const maxL = GeometryHelper.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true); // Chiều dài nhôm tối đa (m)
     if (!maxL || maxL <= 0)
       return this.showFeedback(
         "Lỗi: Chiều dài nhôm max không hợp lệ!",
@@ -788,10 +596,15 @@ export default class Engine {
 
     const isVert = document.getElementById("cfg_dir").value === "90"; // Hướng rải tấm (true=dọc, false=ngang)
 
-    const minCut = this.getInputValue("cfg_minCut", 0, 1000, 200, true) / 1000; // Chiều dài tối thiểu 1 mảnh (m)
+    const minCut = GeometryHelper.getInputValue("cfg_minCut", 0, 1000, 200, true) / 1000; // Chiều dài tối thiểu 1 mảnh (m)
 
     this.state.strips = [];
     const module = pW + gW; // [THI CÔNG] Module = bản rộng tấm + khe hở = bước rải lặp lại
+
+    // [HIỆU NĂNG] Cấu hình chunking cho Web Worker giả lập
+    const CHUNK_SIZE = 50; // Tính 50 thanh mỗi lượt
+    this._calcQueue = [];
+    this._isCalculating = true;
 
     // [BƯỚC 2] TÍNH BOUNDS (Tìm min/max tọa độ mặt bằng)
     let minX = Infinity,
@@ -817,8 +630,57 @@ export default class Engine {
     let offset = ((end - start) % module) / 2;
     if (offset < pW / 2) offset += module / 2;
 
-    // [VÒNG LẶP] Rải tấm: Từ start đến end, mỗi lần cách "module"
+    // Chuẩn bị Queue cho processPanelChunks
     for (let pos = start - module + offset; pos < end; pos += module) {
+      this._calcQueue.push(pos);
+    }
+
+    // Bắt đầu xử lý chunk đầu tiên
+    this.processPanelChunks(minCut, maxL, wGap, isVert, pW, minX, maxX, minY, maxY);
+  }
+
+  // [HIỆU NĂNG] Hàm xử lý queue theo chunk để không treo giao diện
+  processPanelChunks(minCut, maxL, wGap, isVert, pW, minX, maxX, minY, maxY) {
+    if (this._calcQueue.length === 0) {
+      // Xong tấm -> kết cấu -> reset flag
+      // Tính tổng diện tích trần
+      this.totalArea = this.state.strips.reduce(
+        (sum, strip) => sum + strip.totalLen * pW,
+        0,
+      );
+
+      // [BƯỚC 5] TÍNH KẾT CẤU (Xương gài + Ty treo)
+      this.calcStructure(isVert, minX, maxX, minY, maxY);
+
+      this._isCalculating = false;
+
+      // [BƯỚC 6] VẼ & CẬP NHẬT UI
+      this.scheduleDraw();
+      document.getElementById("coords").innerText =
+        `Xong: ${this.state.strips.length} lines.`;
+      
+      // Update preview if available
+      if (this.previewRenderer) {
+          this.previewRenderer.updatePreview(this.state);
+      }
+      return;
+    }
+
+    const CHUNK_SIZE = 50;
+    const chunk = this._calcQueue.splice(0, CHUNK_SIZE);
+    
+    // Process 1 chunk
+    this.processSingleChunk(chunk, minCut, maxL, wGap, isVert, pW);
+
+    // Call continue processing on next tick to allow UI to update
+    setTimeout(() => {
+      this.processPanelChunks(minCut, maxL, wGap, isVert, pW, minX, maxX, minY, maxY);
+    }, 0);
+  }
+
+  // [HIỆU NĂNG] Tách logic xử lý panel để tính toán song song
+  processSingleChunk(chunk, minCut, maxL, wGap, isVert, pW) {
+    for (let pos of chunk) {
       const center = pos + pW / 2; // Tâm tấm (dùng để bắn tia tìm cắt với tường)
       const segs = this.rayCast(center, isVert); // Bắn tia từ tâm tấm, tìm đoạn giao với tường
 
@@ -907,20 +769,6 @@ export default class Engine {
         }
       });
     }
-
-    // Tính tổng diện tích trần
-    this.totalArea = this.state.strips.reduce(
-      (sum, strip) => sum + strip.totalLen * pW,
-      0,
-    );
-
-    // [BƯỚC 5] TÍNH KẾT CẤU (Xương gài + Ty treo)
-    this.calcStructure(isVert, minX, maxX, minY, maxY);
-
-    // [BƯỚC 6] VẼ & CẬP NHẬT UI
-    this.draw();
-    document.getElementById("coords").innerText =
-      `Xong: ${this.state.strips.length} lines.`;
   }
 
   // [HÀM PHỤ] TÍNH TOÁN KẾT CẤU: Xương gài + Ty treo
@@ -933,8 +781,8 @@ export default class Engine {
     // [ĐỌC THÔNG SỐ]
     // [ĐỌC THÔNG SỐ]
     // [FIX] Validate inputs using getInputValue
-    const cX = this.getInputValue("cfg_cX", 0.5, 5.0, 1.0, true); // Bước xương (m)
-    const tY = this.getInputValue("cfg_tY", 0.5, 5.0, 1.0, true); // Bước ty treo (m)
+    const cX = GeometryHelper.getInputValue("cfg_cX", 0.1, 5.0, 1.0, true); // Bước xương (m)
+    const tY = GeometryHelper.getInputValue("cfg_tY", 0.1, 5.0, 1.0, true); // Bước ty (m)treo (m)
 
     // [LOGIC LINEAR] Xương luôn vuông góc với Tấm
     // Nếu Tấm dọc (isPanelVert=true) → Xương ngang (isCarrierVert=false)
@@ -1301,7 +1149,7 @@ export default class Engine {
   // --- TÍNH TOÁN DATA BOQ CHUẨN HÓA (CORE LOGIC) ---
   calculateBOQData() {
     // [FIX] Dùng luôn constant đã import ở đầu file, không await import lại
-    const wastePct = this.getInputValue("cfg_waste") / 100;
+    const wastePct = GeometryHelper.getInputValue("cfg_waste", 0, 50, 0) / 100;
     const accessoryWaste = 1 + wastePct;
 
     const presetName = this.currentPreset
@@ -1311,7 +1159,7 @@ export default class Engine {
 
     // 1. TÍNH TOÁN XƯƠNG GÀI (CARRIER)
     // [UPDATE] Lấy chiều dài xương từ input (3m, 4m, 6m...)
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const carrierBarL = GeometryHelper.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
 
     const carrierSegments = this.state.carriers.map((c) => c.len);
     const totalCarrierLen = carrierSegments.reduce((a, b) => a + b, 0);
@@ -1365,7 +1213,7 @@ export default class Engine {
     // 4. HỆ TREO
     const totalPoints = this.state.hangers.length;
     // [UPDATE] Lấy chiều dài Ty trung bình từ input, mặc định 1.0m
-    const avgHangerLen = this.getInputValue("cfg_hangerL", 0.1, 10.0, 1.0);
+    const avgHangerLen = GeometryHelper.getInputValue("cfg_hangerL", 0.1, 10.0, 1.0);
     const BAR_LEN_ROD = 3.0; // [UPDATE] Ty ren khổ tiêu chuẩn 3m (theo yêu cầu user)
 
     const totalRodMeters = totalPoints * avgHangerLen;
@@ -1397,7 +1245,8 @@ export default class Engine {
     // Fascia > MaxL thì cũng cần splicer
     // ... logic cũ có tính fascia splicer, ở đây ta đơn giản hóa hoặc add thêm vào.
     // Trong code cũ: spliceCount += numParts - 1; cho Fascia.
-    const maxTransLimit = this.getInputValue("cfg_maxTrans") || 12.0;
+    const maxTransLimit = GeometryHelper.getInputValue("cfg_maxTrans", 1.0, 12.0, 12.0, true);
+
     let fasciaSplice = 0;
 
     fasciaSegments.forEach((len) => {
@@ -1449,7 +1298,7 @@ export default class Engine {
         splicer: spliceOrder,
       },
       // [NEW] Info for display
-      panelWidth: this.getInputValue("cfg_pW", 100),
+      panelWidth: GeometryHelper.getInputValue("cfg_pW", 100),
     };
   }
 
@@ -1458,7 +1307,7 @@ export default class Engine {
     if (this.state.strips.length === 0) return;
 
     // [FIX] Define carrierBarL for display
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const carrierBarL = GeometryHelper.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
 
     const metrics = this.calculateBOQData();
 
@@ -1571,8 +1420,9 @@ export default class Engine {
     }
 
     // Default global fallback
-    const globalCarrierL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0, true);
+    const globalCarrierL = GeometryHelper.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const globalHangerL = GeometryHelper.getInputValue("cfg_hangerL", 0.1, 10.0, 1.0);
+    const wastePct = GeometryHelper.getInputValue("cfg_waste", 0, 50, 0, true);
     const waste = 1 + wastePct / 100;
     const vAngleBarLength = 3.0;
 
@@ -1840,8 +1690,8 @@ export default class Engine {
 
     // Tính toán dữ liệu BOQ
     const metrics = this.calculateBOQData();
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
+    const carrierBarL = GeometryHelper.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const wastePct = GeometryHelper.getInputValue("cfg_waste", 0, 50, 0);
 
     let csv = "\uFEFF"; // BOM for Excel UTF-8
 
@@ -1856,7 +1706,7 @@ export default class Engine {
     csv += `Hệ số hao hụt,${wastePct}%\n\n`;
 
     // Luôn tính toán data chuẩn để có metrics base (dùng cho carrier, trims...)
-    const metrics = this.calculateBOQData();
+    // Removed duplicate metrics variable deceleration
 
     if (isModalOpen) {
       // --- MODE 1: EXPORT WHAT YOU SEE (FROM DOM) ---
@@ -1971,8 +1821,8 @@ export default class Engine {
       return;
     }
 
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
+    const carrierBarL = GeometryHelper.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
+    const wastePct = GeometryHelper.getInputValue("cfg_waste", 0, 50, 0);
     const waste = 1 + wastePct / 100;
 
     let csv = "\uFEFF"; // BOM
@@ -2198,7 +2048,7 @@ export default class Engine {
             data.edgeTypes[i] || this.state.edges[i].type;
         }
         this.calculate(); // Tính toán lại với edge types mới
-        this.draw(); // Vẽ lại canvas
+        this.scheduleDraw(); // Vẽ lại canvas
       }
     } else {
       // [FREE MODE] Từ points → restore trực tiếp (vì là custom geometry)
@@ -2217,7 +2067,7 @@ export default class Engine {
           }
         }
         this.calculate(); // Tính toán lại
-        this.draw(); // Vẽ lại canvas
+        this.scheduleDraw(); // Vẽ lại canvas
       }
     }
 
@@ -2375,7 +2225,17 @@ export default class Engine {
     this.updateAddButtonUI(); // Nút sẽ thay đổi từ "Thêm" thành "Lưu"
   }
 
-  // --- XÓA ZONE (DELETE ZONE) ---
+  scheduleDraw() {
+    if (!this._isDrawing) {
+      this._isDrawing = true;
+      requestAnimationFrame(() => {
+        this.draw();
+        this._isDrawing = false;
+      });
+    }
+  }
+
+  // --- VẼ GIAO DIỆN (RENDER ENGINE) ---
   // [CÔNG DỤNG] Xóa 1 phòng khỏi danh sách project
   // [THI CÔNG] Khi click nút 🗑️ → xóa zone này
   // [THAM SỐ] index: Vị trí trong mảng state.projectZones
