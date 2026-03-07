@@ -603,3 +603,30 @@ select.success {
 .opt-group .row:last-child {
   margin-bottom: 0;
 }
+
+/* [AUTO-CAD] UI STYLES */
+#cmd-bar-container {
+  transition: all 0.2s ease;
+  backdrop-filter: blur(5px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#cmd-bar-container:focus-within {
+  border-color: #0f62fe;
+  box-shadow: 0 4px 15px rgba(15, 98, 254, 0.4);
+}
+
+#cmd-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+#cursor-tooltip {
+  pointer-events: none;
+  transition: opacity 0.1s;
+  line-height: 1.4;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+#cursor-tooltip.hidden {
+  opacity: 0;
+}

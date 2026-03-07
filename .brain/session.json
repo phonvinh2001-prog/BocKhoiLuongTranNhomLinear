@@ -1,53 +1,71 @@
 {
-  "updated_at": "2026-01-26T22:30:00+07:00",
+  "updated_at": "2026-01-29T17:05:00+07:00",
   "working_on": {
-    "feature": "Cleanup & Documentation",
-    "task": "Brain Sync",
-    "status": "finalizing",
-    "files": [".brain/brain.json", ".brain/session.json"],
+    "feature": "AutoCAD-like Drawing & UX Polish",
+    "task": "Finalizing Command Bar & Preset Management",
+    "status": "completed",
+    "files": ["js/Engine.js", "index.html", "css/style.css"],
     "blockers": [],
-    "notes": "Session completed successfully. Code pushed to GitHub."
+    "notes": "Resolved all reported issues (View drift, Command Bar visibility, Preset creation)."
   },
   "pending_tasks": [
     {
-      "task": "Manual verification by user",
-      "priority": "high",
-      "notes": "Verify project file loading and multi-zone CSV export."
+      "task": "User Verification of complex drawing flows",
+      "priority": "medium",
+      "notes": "Ensure complex shapes work with new command parser."
     }
   ],
   "recent_changes": [
     {
-      "timestamp": "2026-01-26T22:20:00+07:00",
-      "type": "feature",
-      "description": "Implemented Project File Management (Export/Import/New) and multi-zone Excel export.",
-      "files": ["index.html", "js/Engine.js", "js/main.js"]
+      "timestamp": "2026-01-29T11:43:00+07:00",
+      "type": "fix",
+      "description": "Fixed Command Bar visibility by moving it out of boqModal.",
+      "files": ["index.html"]
     },
     {
-      "timestamp": "2026-01-26T21:50:00+07:00",
+      "timestamp": "2026-01-29T14:02:00+07:00",
       "type": "feature",
-      "description": "Implemented Data Persistence (Auto-Save/Load) for Inputs, Geometry, and Project List.",
-      "files": ["js/Engine.js", "js/utils.js", "js/main.js"]
+      "description": "Enhanced Command Parser to support Polar coords without @ (e.g. 5<30).",
+      "files": ["js/Engine.js"]
+    },
+    {
+      "timestamp": "2026-01-29T16:40:00+07:00",
+      "type": "fix",
+      "description": "Implemented missing saveNewPreset function for User Preset creation.",
+      "files": ["js/Engine.js"]
+    },
+    {
+      "timestamp": "2026-01-29T11:30:00+07:00",
+      "type": "fix",
+      "description": "Fixed View Centering regression by correcting CSS class name (.container -> .viewport) and adding size fallback.",
+      "files": ["css/style.css", "js/Engine.js"]
     }
   ],
   "errors_encountered": [
     {
-      "error": "Git config required for push",
-      "solution": "User configured git email/name manually.",
+      "error": "View drifted to infinity",
+      "solution": "Added fallback dimensions to centerView and fixed CSS layout.",
+      "resolved": true
+    },
+    {
+      "error": "Command Bar not visible",
+      "solution": "Moved #cmd-bar-container from inside #boqModal (hidden) to root .viewport.",
+      "resolved": true
+    },
+    {
+      "error": "Create Preset button inactive",
+      "solution": "Implemented missing app.saveNewPreset() function.",
       "resolved": true
     }
   ],
   "decisions_made": [
     {
-      "decision": "Use LocalStorage for Persistence",
-      "reason": "Zero-config solution, sufficient for current data size (~5MB limit)."
+      "decision": "Support Simplified Polar Input",
+      "reason": "Users intuitively type '5<30' instead of '@5<30'. better UX."
     },
     {
-      "decision": "JSON format for Project Files",
-      "reason": "Native support, easy to parse and human-readable for debugging."
-    },
-    {
-      "decision": "Two-level CSV export",
-      "reason": "Allows flexibility between checking individual room details vs. total project estimation."
+      "decision": "Feedback-first UI",
+      "reason": "Added 'Specify first point' tooltip to indicate tool readiness."
     }
   ]
 }

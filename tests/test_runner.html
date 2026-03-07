@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CAD Logic Test Runner</title>
+    <style>
+      body {
+        font-family: monospace;
+        padding: 20px;
+      }
+      .pass {
+        color: green;
+      }
+      .fail {
+        color: red;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>CAD Parser Unit Tests</h1>
+    <div id="results">Running...</div>
+
+    <script type="module">
+      import { CAD_UTILS } from "../js/CADParser.js";
+
+      const output = document.getElementById("results");
+
+      function log(msg, type) {
+        const div = document.createElement("div");
+        div.textContent = msg;
+        div.className = type;
+        output.appendChild(div);
+      }
+
+      function assertDeepEqual(actual, expected) {
+        const a = JSON.stringify(actual);
+        const b = JSON.stringify(expected);
+        if (a !== b) {
+          throw new Error(`Expected ${b}, got ${a}`);
+        }
+      }
+
+      function test(name, fn) {
+        try {
+          fn();
+          log(`✅ PASS: ${name}`, "pass");
+        } catch (e) {
+          log(`❌ FAIL: ${name} - ${e.message}`, "fail");
+        }
+      }
+
+      // --- TESTS ---
+
+      test("Parse Direct Distance (5.5)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("5.5"), {
+          type: "DIST",
+          val: 5.5,
+        });
+      });
+
+      test("Parse Relative Coords (@2,3)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("@2,3"), {
+          type: "REL_COORD",
+          x: 2,
+          y: 3,
+        });
+      });
+
+      test("Parse Relative Negative (@-2,-3.5)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("@-2,-3.5"), {
+          type: "REL_COORD",
+          x: -2,
+          y: -3.5,
+        });
+      });
+
+      test("Parse Polar Standard (@5<45)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("@5<45"), {
+          type: "POLAR",
+          dist: 5,
+          angle: 45,
+        });
+      });
+
+      test("Parse Polar Simplified (5<30)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("5<30"), {
+          type: "POLAR",
+          dist: 5,
+          angle: 30,
+        });
+      });
+
+      test("Parse Absolute Coords (10,10)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("10,10"), {
+          type: "ABS_COORD",
+          x: 10,
+          y: 10,
+        });
+      });
+
+      test("Parse Command (L)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("L"), { type: "CMD", val: "L" });
+      });
+
+      test("Parse Command (CLOSE)", () => {
+        assertDeepEqual(CAD_UTILS.parseInput("CLOSE"), {
+          type: "CMD",
+          val: "CLOSE",
+        });
+      });
+
+      test("Calculate Destination (Polar 90deg)", () => {
+        const dest = CAD_UTILS.calcDest({ x: 0, y: 0 }, 5, 90);
+        if (Math.abs(dest.x) > 0.0001 || Math.abs(dest.y - 5) > 0.0001) {
+          throw new Error(`Calc error: ${JSON.stringify(dest)}`);
+        }
+      });
+
+      log("--- DONE ---", "");
+    </script>
+  </body>
+</html>

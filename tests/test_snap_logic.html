@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Snap Logic Test</title>
+  </head>
+  <body>
+    <div id="results">Running...</div>
+    <script>
+      const results = document.getElementById("results");
+      const log = (msg, color = "black") => {
+        const div = document.createElement("div");
+        div.textContent = msg;
+        div.style.color = color;
+        results.appendChild(div);
+      };
+
+      // --- MOCK DATA ---
+      const state = {
+        strips: [],
+        points: [
+          { x: 0, y: 0 }, // Corner 1
+          { x: 5, y: 0 }, // Corner 2
+          { x: 5, y: 8 }, // Corner 3
+          { x: 0, y: 8 }, // Corner 4
+          { x: 0, y: 4 }, // Helper Point (e.g. inner U corner)
+          { x: 2, y: 4 },
+        ],
+        edges: [
+          { p1: { x: 0, y: 0 }, p2: { x: 5, y: 0 }, type: "WALL_V" }, // Horizontal Edge at Y=0
+          { p1: { x: 0, y: 4 }, p2: { x: 2, y: 4 }, type: "WALL_V" }, // Horizontal Edge at Y=4
+        ],
+      };
+
+      // --- ALGORITHM UNDER TEST ---
+      function findSnapPoint(jointVal, strip, corners, edges) {
+        const SNAP_DIST = 0.2; // 20cm
+        let globalPos = strip.start + jointVal;
+        let isVertStrip = strip.isVert;
+
+        // 1. Snap to Vertices
+        for (let p of corners) {
+          const target = isVertStrip ? p.y : p.x;
+          if (Math.abs(globalPos - target) < SNAP_DIST) {
+            return { val: target, type: "VERTEX" };
+          }
+        }
+
+        // 2. Snap to Edges
+        for (let e of edges) {
+          if (isVertStrip) {
+            if (Math.abs(e.p1.y - e.p2.y) < 0.01) {
+              const target = e.p1.y;
+              if (Math.abs(globalPos - target) < SNAP_DIST) {
+                return { val: target, type: "EDGE" };
+              }
+            }
+          } else {
+            if (Math.abs(e.p1.x - e.p2.x) < 0.01) {
+              const target = e.p1.x;
+              if (Math.abs(globalPos - target) < SNAP_DIST) {
+                return { val: target, type: "EDGE" };
+              }
+            }
+          }
+        }
+        return null;
+      }
+
+      // --- TEST RUNNER ---
+      try {
+        log("🧪 TESTING SNAP LOGIC...");
+
+        // Case 1
+        {
+          const strip = { start: 0, end: 8, pos: 1.5, isVert: true };
+          const res = findSnapPoint(3.9, strip, state.points, state.edges);
+          if (res && Math.abs(res.val - 4.0) < 0.001)
+            log("✅ Case 1 (Vertex Snap): PASS", "green");
+          else
+            log(
+              `❌ Case 1 FAIL: Expected 4.0, got ${res ? res.val : "null"}`,
+              "red",
+            );
+        }
+
+        // Case 2
+        {
+          const strip = { start: 0, end: 5, pos: 2.0, isVert: false };
+          const res = findSnapPoint(4.9, strip, state.points, state.edges);
+          if (res && Math.abs(res.val - 5.0) < 0.001)
+            log("✅ Case 2 (Vertex Snap Horz): PASS", "green");
+          else
+            log(
+              `❌ Case 2 FAIL: Expected 5.0, got ${res ? res.val : "null"}`,
+              "red",
+            );
+        }
+
+        // Case 3
+        {
+          const strip = { start: 0, end: 8, pos: 1.5, isVert: true };
+          const res = findSnapPoint(0.1, strip, state.points, state.edges);
+          if (res && Math.abs(res.val - 0.0) < 0.001)
+            log("✅ Case 3 (Edge Snap): PASS", "green");
+          else
+            log(
+              `❌ Case 3 FAIL: Expected 0.0, got ${res ? res.val : "null"}`,
+              "red",
+            );
+        }
+
+        // Case 4
+        {
+          const strip = { start: 0, end: 8, pos: 1.5, isVert: true };
+          const res = findSnapPoint(2.5, strip, state.points, state.edges);
+          if (res === null) log("✅ Case 4 (No Snap): PASS", "green");
+          else log(`❌ Case 4 FAIL: Expected null, got ${res.val}`, "red");
+        }
+
+        log("🏁 DONE", "blue");
+      } catch (e) {
+        log("❌ ERROR: " + e.message, "red");
+      }
+    </script>
+  </body>
+</html>

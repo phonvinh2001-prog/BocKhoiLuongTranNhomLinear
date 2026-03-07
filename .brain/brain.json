@@ -30,7 +30,13 @@
       "name": "Project File Management (Export/Import/New)",
       "status": "Implemented"
     },
-    { "name": "Improved Excel (CSV) Export", "status": "Implemented" }
+    { "name": "Improved Excel (CSV) Export", "status": "Implemented" },
+    {
+      "name": "AutoCAD Command Interface (L, Start, Dist<Ang)",
+      "status": "Implemented"
+    },
+    { "name": "Auto-Center View", "status": "Implemented" },
+    { "name": "User Preset Creation", "status": "Implemented" }
   ],
   "knowledge_items": {
     "patterns": [
@@ -42,7 +48,9 @@
     "gotchas": [
       "Carrier Length default is 3m if not specified",
       "Gap width 0 must be handled explicitly",
-      "LocalStorage limited to ~5MB"
+      "LocalStorage limited to ~5MB",
+      "Modal nesting can hide absolute positioned elements (z-index context)",
+      "Canvas size 0 causes infinite scale calculation"
     ]
   }
 }

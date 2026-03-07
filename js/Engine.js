@@ -29,7 +29,12 @@ import { EDGE_TYPES, CONSTRUCTION_STD } from "./constants.js"; // Nhập định
 import { distToSeg, saveToStorage, loadFromStorage } from "./utils.js"; // Nhập công cụ tính toán & storage
 import PreviewRenderer from "./PreviewRenderer.js"; // Nhập renderer cho preview panel
 
-// 2. XUẤT CLASS ĐỂ MAIN.JS CÓ THỂ DÙNG
+// [NEW] AutoCAD Utilities
+// [NEW] AutoCAD Utilities (Imported from separate file)
+// [NEW] AutoCAD Utilities (Imported from separate file)
+import { CAD_UTILS } from "./CADParser.js";
+import { JointSolver } from "./JointSolver.js";
+
 export default class Engine {
   constructor() {
     this.cvs = document.getElementById("cvs");
@@ -39,30 +44,44 @@ export default class Engine {
     this.totalArea = 0;
     this.userPresets = [];
 
-    // [TRẠNG THÁI HỆ THỐNG] Chứa toàn bộ dữ liệu tính toán
+    // [STATE] Drawing State
     this.state = {
-      points: [], // [HÌNH HỌC] Các điểm góc của mặt bằng
-      edges: [], // [HÌNH HỌC] Các cạnh tường (có loại viền)
-      strips: [], // [TẤM TRẦN] Danh sách các dãy tấm (pos, pieces[], totalLen)
-      carriers: [], // [XƯƠNG] Danh sách thanh xương gài (x1, y1, x2, y2, len)
-      hangers: [], // [TY TREO] Danh sách điểm treo ty
-      // [QUẢN LÝ DỰ ÁN]
-      editingIndex: null, // null = thêm mới; number = sửa dự án thứ N
-      projectZones: [], // Mảng lưu các phòng: {id, name, ts, savedState, stats}
-      // [VẼ & VIEW]
-      scale: 40, // Hệ số phóng to (px/mét)
-      panX: 50, // Offset X từ trái canvas
-      panY: 50, // Offset Y từ trên canvas
-      mode: "IDLE", // "IDLE" | "DRAW" | ...
-      isDrag: false, // Đang kéo canvas?
-      lastM: { x: 0, y: 0 }, // Vị trí chuột lần trước
-      inputMode: "PRESET", // "PRESET" (nhập hình mẫu) hoặc "FREE" (vẽ tự do)
+      mode: "IDLE", // IDLE, DRAW, EDIT
+      points: [], // Array of {x, y}
+      strips: [], // Array of strips
+      gridSize: 0.5, // Grid snap size (meters)
+      scale: 50, // Pixels per meter
+      panX: 0,
+      panY: 0,
+      isDrag: false,
+      lastM: { x: 0, y: 0 },
+      edges: [], // List of wall edges {p1, p2, type}
+      viewportW: 800,
+      viewportH: 600,
+
+      // [PROJECT ZONES] Storage
+      projectZones: [],
+      editingIndex: null,
+
+      // [NEW] AutoCAD Features State
+      CMD: {
+        lastPoint: null, // Last clicked point (for relative coords)
+        cursorPos: { x: 0, y: 0 }, // Current mouse pos (meters)
+        isOrtho: false, // Ortho mode active?
+        tempPoints: [], // For ghost lines
+        history: [], // Command history
+        activeCmd: null, // Current active command (e.g., 'OFFSET')
+      },
     };
 
     // [DATA PERSISTENCE] Cấu hình lưu trữ
     this.STORAGE_KEY = "ALUMASTER_V17_STATE";
     this.saveTimeout = null;
 
+    this.ctx.stroke();
+
+    // [AUTO-CAD] Draw Overlay (Ghost lines, Tooltips)
+    // This call is moved to the end of the draw() method.
     this.resize();
     this.bindEvents();
     this.loadPresets();
@@ -70,7 +89,18 @@ export default class Engine {
     // Khởi tạo preview renderer
     this.previewRenderer = new PreviewRenderer("previewCanvas");
 
-    this.preset();
+    // [AUTO-CAD] Setup Event Listeners
+    this.setupCADListeners();
+
+    // [NEW] Joint Solver
+    this.jointSolver = new JointSolver();
+    // Default Joint Config
+    this.state.jointConfig = {
+      pattern: "DEFAULT", // DEFAULT, GRID, BRICK, RANDOM
+      patternShift: 0.5,
+    };
+    // Initialize in PRESET mode (this will hide CMD bar)
+    this.switchMode("PRESET");
   }
 
   // [HELPER] Show feedback to user in UI
@@ -159,6 +189,10 @@ export default class Engine {
     document.getElementById("ui_free").style.display =
       mode === "FREE" ? "block" : "none";
 
+    // Cập nhật Command Bar (Chỉ hiện khi Free Draw)
+    const cmdBar = document.getElementById("cmd-bar-container");
+    if (cmdBar) cmdBar.style.display = mode === "FREE" ? "flex" : "none";
+
     // Cập nhật nút Active
     document.getElementById("btn_tab_preset").className =
       mode === "PRESET" ? "tab-btn active" : "tab-btn";
@@ -182,9 +216,24 @@ export default class Engine {
 
   bindEvents() {
     window.onresize = () => this.resize();
-    this.cont.onmousedown = (e) => this.onDown(e);
-    this.cont.onmousemove = (e) => this.onMove(e);
-    this.cont.onmouseup = () => (this.state.isDrag = false);
+    this.cont.onmousedown = (e) => {
+      // [NEW] Check Joint Click first
+      const m = this.getMouse(e);
+      // Check Drag Start
+      if (this.handleJointDown && this.handleJointDown(e)) return;
+      // Check Click (Add/Remove) - Only if not dragging
+      if (this.handleJointClick && this.handleJointClick(m)) return;
+
+      this.onDown(e);
+    };
+    this.cont.onmousemove = (e) => {
+      if (this.handleJointDrag && this.handleJointDrag(e)) return;
+      this.onMove(e);
+    };
+    this.cont.onmouseup = () => {
+      if (this.handleJointUp && this.handleJointUp()) return;
+      this.state.isDrag = false;
+    };
     this.cont.onwheel = (e) => {
       e.preventDefault();
       const z = e.deltaY > 0 ? 0.9 : 1.1;
@@ -552,6 +601,64 @@ export default class Engine {
     this.updatePreview(type, pts);
   }
 
+  // [HELPER] Auto-center view on drawing
+  centerView() {
+    if (this.state.points.length === 0) return;
+
+    // 1. Calculate Bounding Box
+    let minX = Infinity,
+      minY = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity;
+
+    this.state.points.forEach((p) => {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    });
+
+    // 2. Add Padding (10%)
+    const padding = 1.0; // meters
+    const width = maxX - minX + padding * 2;
+    const height = maxY - minY + padding * 2;
+
+    // 3. Calculate Fit Scale
+    // [FIX] Fallback if canvas has no size yet (initial load)
+    const cvsW = this.cvs.width && this.cvs.width > 0 ? this.cvs.width : 800;
+    const cvsH = this.cvs.height && this.cvs.height > 0 ? this.cvs.height : 600;
+
+    const scaleX = cvsW / width;
+    const scaleY = cvsH / height;
+
+    // Use smaller scale to fit both dims
+    let finalScale = Math.min(scaleX, scaleY);
+
+    // Clamp Scale (Min 10px/m, Max 100px/m)
+    finalScale = Math.max(10, Math.min(finalScale, 100));
+
+    // 4. Calculate Pan to Center
+    // Center of drawing in world coords:
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    // Pan calculation:
+    // ScreenCenter = CanvasW/2
+    // ScreenPos = WorldPos * Scale + Pan
+    // Pan = ScreenCenter - WorldCenter * Scale
+
+    this.state.scale = finalScale;
+    this.state.panX = cvsW / 2 - centerX * finalScale;
+    this.state.panY = cvsH / 2 - centerY * finalScale;
+
+    // [DEBUG] Log centering calculation
+    console.log(
+      `[CenterView] Canvas: ${cvsW}x${cvsH}, Scale: ${finalScale}, Pan: ${this.state.panX},${this.state.panY}`,
+    );
+
+    this.draw();
+  }
+
   // [HELPER] Cập nhật preview panel
   updatePreview(shapeType, points) {
     const previewPanel = document.getElementById("preview-panel");
@@ -641,6 +748,33 @@ export default class Engine {
     }));
   }
 
+  // [HÀM PHỤ] Tính diện tích hình học thực tế (m2)
+  getPolygonArea() {
+    let area = 0;
+    const pts = this.state.points;
+    if (!pts || pts.length < 3) return 0;
+    for (let i = 0; i < pts.length; i++) {
+      let j = (i + 1) % pts.length;
+      area += pts[i].x * pts[j].y;
+      area -= pts[j].x * pts[i].y;
+    }
+    return Math.abs(area / 2);
+  }
+
+  // [HÀM PHỤ] Tính chu vi hình học thực tế (m dài)
+  getPolygonPerimeter() {
+    let perim = 0;
+    const pts = this.state.points;
+    if (!pts || pts.length < 3) return 0;
+    for (let i = 0; i < pts.length; i++) {
+      let j = (i + 1) % pts.length;
+      const dx = pts[j].x - pts[i].x;
+      const dy = pts[j].y - pts[i].y;
+      perim += Math.sqrt(dx * dx + dy * dy);
+    }
+    return perim;
+  }
+
   // --- TƯƠNG TÁC NGƯỜI DÙNG (INTERACTION HANDLER) ---
   // [CÔNG DỤNG] Xử lý sự kiện chuột từ người dùng
   // [THI CÔNG] Dùng để vẽ mặt bằng custom + chuyển đổi loại viền
@@ -663,8 +797,29 @@ export default class Engine {
       return;
     }
 
+    // [AUTO-CAD] Update Cursor Pos immediately
+    const rawM = this.getMouse(e);
+    // Apply Ortho for Click (if Shift held or F8 Active)
+    // Need last point to calc ortho projection
+    let finalM = rawM;
+    const lastPt =
+      this.state.points.length > 0
+        ? this.state.points[this.state.points.length - 1]
+        : null;
+
+    // Check ORTHO (Shift key OR F8 State)
+    const isOrtho = e.shiftKey || this.state.CMD.isOrtho;
+
+    if (this.state.mode === "DRAW" && lastPt && isOrtho) {
+      const dx = Math.abs(rawM.x - lastPt.x);
+      const dy = Math.abs(rawM.y - lastPt.y);
+      if (dx > dy)
+        finalM = { x: rawM.x, y: lastPt.y }; // Horizontal lock
+      else finalM = { x: lastPt.x, y: rawM.y }; // Vertical lock
+    }
+
     // [CONVERT] Chuyển đổi từ tọa độ màn hình (pixel) sang tọa độ canvas (mét)
-    const m = this.getMouse(e);
+    const m = finalM;
 
     // [CHẾ ĐỘ DRAW] Vẽ mặt bằng custom
     if (this.state.mode === "DRAW" && e.button === 0) {
@@ -728,10 +883,12 @@ export default class Engine {
 
     // [HIỂN THỊ TỌA ĐỘ] Nếu ở chế độ DRAW → hiển thị tọa độ chuột
     const m = this.getMouse(e);
+    // [AUTO-CAD] Store cursor pos for Command Parser
+    this.state.CMD.cursorPos = m;
+
+    // [AUTO-CAD] Re-draw to show ghost lines
     if (this.state.mode === "DRAW") {
-      // [COORDS] Cập nhật hiển thị tọa độ hiện tại (X, Y) theo format "xx.xxm"
-      document.getElementById("coords").innerText =
-        `Drawing: ${m.x.toFixed(2)}, ${m.y.toFixed(2)}`;
+      this.draw();
     }
   }
 
@@ -862,44 +1019,53 @@ export default class Engine {
         // [BÓC TÁCH] Chiều dài hữu ích của đoạn = (điểm cuối - điểm đầu) - 2 lần khe tường
         let runLen = seg.end - seg.start - wGap * 2;
         if (runLen > 0.01) {
-          // [BƯỚC 4] CẮT TẤM THÀNH MẢNH - TỐI ƯU END PIECE
-          // [SỬA LỖI 5] Nếu end piece quá nhỏ (< minCut), chia cân bằng để tránh phế phẩm
-          // [NGUYÊN NHÂN] Cắt tuần tự maxL có thể để lại mảnh cuối < 200mm (phế phẩm)
-          let pieces = [];
-          const estimatedPieces = Math.ceil(runLen / maxL);
-          const estimatedEndPiece = runLen - (estimatedPieces - 1) * maxL;
+          // [REFACTORED] DÙNG JOINT SOLVER ĐỂ TÍNH TOÁN CẮT TẤM
 
-          if (estimatedEndPiece < minCut && estimatedPieces > 1) {
-            // [THI CÔNG] End piece quá nhỏ → chia cân bằng từng mảnh
-            // [VD] runLen=6.1m, maxL=6m: thay vì [6m, 0.1m] → [3.05m, 3.05m]
-            // [LỢI ÍCH] Tránh phế phẩm, chất lượng hơn, không lãng phí vật liệu
-            const avgLen = runLen / estimatedPieces;
-            for (let i = 0; i < estimatedPieces; i++) {
-              pieces.push(avgLen);
-            }
-          } else {
-            // [THI CÔNG] End piece OK → cắt lần lượt bình thường
-            let rem = runLen;
-            while (rem > 0) {
-              let cut = rem > maxL ? maxL : rem;
-              pieces.push(cut);
-              rem -= cut;
-            }
+          // [NEW] Lấy Manual Joints từ Map (nếu có)
+          if (!this.state.manualJointsMap) this.state.manualJointsMap = {};
+          const stripKey = pos.toFixed(3);
+          /* [MODIFIED] Clone array to allow injection of drag joint */
+          let manualJoints = [...(this.state.manualJointsMap[stripKey] || [])];
+
+          // [DRAG SUPPORT] Inject Dragging Joint temp
+          if (
+            this.state &&
+            this.state.dragJoint &&
+            this.state.dragJoint.stripKey === stripKey
+          ) {
+            manualJoints.push(this.state.dragJoint.val);
           }
 
-          // [SỬA LỖI 1] Đếm splicer từ CẮT PANEL > maxL
-          // [NGUYÊN NHÂN] Nếu 1 panel cắt thành N mảnh → cần N-1 splicer để nối lại
-          // [VD] runLen=8m cắt thành [6m, 2m] → 2 mảnh → 1 splicer
-          // [LƯU Ý] Phải đếm LÚC CẮT, không phải LÚC CHIA TRANSPORT
-          const spliceCount_fromCutting =
-            pieces.length > 1 ? pieces.length - 1 : 0;
+          // 1. Lấy config manual joints cho strip này
+          const stripConfig = {
+            manualJoints: manualJoints,
+            pattern: this.state.jointConfig.pattern,
+            patternShift: this.state.jointConfig.patternShift,
+            rowId: this.state.strips.length, // Dùng index làm rowId cho pattern so le
+          };
 
-          // [CHẤT LƯỢNG] Đánh dấu từng mảnh: OK (≥ minCut) hay BAD (< minCut = phế phẩm)
-          const validPieces = pieces.map((len) => ({
+          // 2. Tính toán cắt
+          // runLen: chiều dài thực tế cần phủ
+          // maxL: chiều dài thanh nhôm
+          // minCut: chiều dài tối thiểu
+          const rawPieces = this.jointSolver.solveStrip(
+            runLen,
+            maxL,
+            stripConfig,
+            minCut,
+          );
+
+          // 3. Convert lại format cũ (thêm status)
+          const validPieces = rawPieces.map((len) => ({
             len: len,
-            status: len < minCut ? "BAD" : "OK", // Nếu < 200mm → BAD (lãng phí)
+            status: len < minCut ? "BAD" : "OK",
           }));
 
+          // 4. Đếm Splicer (Số đoạn - 1)
+          const spliceCount_fromCutting =
+            validPieces.length > 1 ? validPieces.length - 1 : 0;
+
+          // 5. Tính toán Offset (Logic cũ)
           // [SỬA LỖI 3] Áp dụng offset cho điểm bắt đầu/kết thúc tấm (chỉ dùng wGap, bỏ SAFE_DIST)
           // [NGUYÊN NHÂN] Tấm trần cần sát viền, chỉ cách wGap hoặc offset của V-Góc
           // [THI CÔNG] SAFE_DIST (300mm) chỉ dùng cho kết cấu (xương/ty), không cho tấm
@@ -938,6 +1104,8 @@ export default class Engine {
             pieces: validPieces, // Mảng các mảnh {len, status}
             splices: spliceCount_fromCutting, // [SỬA LỖI 1] Splicer từ cắt panel
             totalLen: runLen, // Tổng chiều dài thực
+            // [NEW] Lưu config joint để hỗ trợ Edit sau này
+            jointConfig: stripConfig,
           });
         }
       });
@@ -1245,7 +1413,88 @@ export default class Engine {
           ctx.strokeStyle = "#1976D2"; // Màu xanh đậm = giao tuyến
           ctx.lineWidth = 0.02; // Độ dày đường (tính bằng mét)
           ctx.stroke(); // Vẽ đường
+
+          // [NEW] Visual Cue for Manual Joints vs Auto Joints
+          // Manual Joints should be highlighted if in Edit Mode
+          const isManualJoin = false; // TODO: Lấy info từ piece nếu có
+          // Hiện tại piece chỉ có len, status. Ta chưa pass info Manual từ JointSolver.
+          // Tạm thời vẽ tất cả joints.
+
+          // [NEW] Draw Manual Joints specifically (Overlay)
+          // Lấy manual joints từ stripConfig nếu có
+          if (
+            s.jointConfig &&
+            s.jointConfig.manualJoints &&
+            s.jointConfig.manualJoints.length > 0
+          ) {
+            const mJoints = s.jointConfig.manualJoints;
+            ctx.fillStyle = "blue";
+
+            mJoints.forEach((mj) => {
+              // Convert mj (distance from start) to coord
+              let jX, jY;
+              if (s.isVert) {
+                jX = s.pos + s.width / 2;
+                jY = s.start + mj;
+                // Draw Circle or Marker
+                ctx.beginPath();
+                ctx.arc(jX, jY, 0.08, 0, Math.PI * 2);
+                ctx.fill();
+              } else {
+                jX = s.start + mj;
+                jY = s.pos + s.width / 2;
+                ctx.beginPath();
+                ctx.arc(jX, jY, 0.08, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            });
+          }
         });
+
+        // [NEW] Highlight Strip on Hover during Joint Edit Mode
+        if (this.state.isJointEditing) {
+          // Draw hover effect?
+          // Need mouse pos. this.state.CMD.cursorPos (updated in onMove)
+          // But drag/pan logic uses this.state.lastM.
+          // Let's rely on standard cursor logic or just the fact that "blue dots" appear.
+          // When hovering, maybe show a ghost manual joint?
+          // That requires `onMove` to trigger `draw` and pass mouse pos.
+
+          // Draw "Ghost Joint" at mouse pos if hovering this strip
+          const m = this.state.CMD.cursorPos;
+          if (m) {
+            let isHover = false;
+            if (s.isVert) {
+              if (
+                Math.abs(m.x - (s.pos + s.width / 2)) < s.width / 2 + 0.1 &&
+                m.y >= s.start &&
+                m.y <= s.end
+              )
+                isHover = true;
+            } else {
+              if (
+                Math.abs(m.y - (s.pos + s.width / 2)) < s.width / 2 + 0.1 &&
+                m.x >= s.start &&
+                m.x <= s.end
+              )
+                isHover = true;
+            }
+
+            if (isHover) {
+              // Draw Ghost Joint
+              ctx.fillStyle = "rgba(0,0,255,0.5)";
+              ctx.beginPath();
+              ctx.arc(m.x, m.y, 0.08, 0, Math.PI * 2);
+              ctx.fill();
+
+              // Draw dimensions
+              const dist = s.isVert ? m.y - s.start : m.x - s.start;
+              ctx.font = "0.2px Arial";
+              ctx.fillStyle = "blue";
+              ctx.fillText(dist.toFixed(2) + "m", m.x + 0.1, m.y - 0.1);
+            }
+          }
+        }
       });
 
       // [PHẦN 3] VẼ VIỀN (EDGE)
@@ -1303,6 +1552,33 @@ export default class Engine {
       }
     }
 
+    // [NEW] VẼ SNAP LINE (NẾU CÓ)
+    if (this.state.snapLine) {
+      ctx.beginPath();
+      // Draw infinite line or segment? infinite is better for alignment
+      // Draw large line centered at snap pos
+      const sl = this.state.snapLine;
+      if (sl.type === "VERT") {
+        ctx.moveTo(sl.val, sl.y - 10);
+        ctx.lineTo(sl.val, sl.y + 10);
+      } else {
+        ctx.moveTo(sl.x - 10, sl.val);
+        ctx.lineTo(sl.x + 10, sl.val);
+      }
+      ctx.strokeStyle = "#FFEB3B"; // Yellow snap line
+      ctx.setLineDash([0.2, 0.1]); // Dashed
+      ctx.lineWidth = 0.03;
+      ctx.stroke();
+      ctx.setLineDash([]); // Reset dash
+
+      // Draw Marker
+      ctx.fillStyle = "#FFEB3B";
+      ctx.beginPath();
+      if (sl.type === "VERT") ctx.arc(sl.val, sl.y, 0.15, 0, Math.PI * 2);
+      else ctx.arc(sl.x, sl.val, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.restore(); // Khôi phục trạng thái transform ban đầu
   }
 
@@ -1333,8 +1609,58 @@ export default class Engine {
     return bars.length;
   }
 
+  // [NEW] LƯU PRESET MỚI TỪ UI
+  saveNewPreset() {
+    const name = document.getElementById("newPresetName").value;
+    const pW = parseFloat(document.getElementById("newPresetPW").value);
+    const gW = parseFloat(document.getElementById("newPresetGW").value);
+    const maxL = parseFloat(document.getElementById("newPresetMaxL").value);
+    const color = document.getElementById("newPresetColor").value;
+
+    // Validate
+    if (!name) {
+      this.showFeedback("Vui lòng nhập tên mẫu!", "error");
+      return;
+    }
+    if (isNaN(pW) || isNaN(gW) || isNaN(maxL)) {
+      this.showFeedback("Kích thước không hợp lệ!", "error");
+      return;
+    }
+
+    // Create Preset Object
+    const newPreset = {
+      name: name,
+      pW: pW,
+      gW: gW,
+      maxL: maxL,
+      color: color,
+      type: "user", // Mark as user preset
+    };
+
+    // Add to list
+    this.userPresets.push(newPreset);
+
+    // Save to Storage
+    saveToStorage("USER_PRESETS", this.userPresets); // Helper util
+    this.saveState(); // Save full state as backup
+
+    // Update Dropdown
+    this.updatePresetDropdown();
+
+    // Switch to this preset
+    document.getElementById("presetSelect").value = name;
+    this.applyPreset(name);
+
+    // Close Modal & Feedback
+    document.getElementById("presetModal").classList.add("hidden");
+    this.showFeedback(`Đã tạo mẫu mới: ${name}`, "success");
+
+    // Clear inputs
+    document.getElementById("newPresetName").value = "";
+  }
+
   // --- TÍNH TOÁN DATA BOQ CHUẨN HÓA (CORE LOGIC) ---
-  calculateBOQData() {
+  calculateBOQData(forceMode = null) {
     // [FIX] Dùng luôn constant đã import ở đầu file, không await import lại
     const wastePct = this.getInputValue("cfg_waste") / 100;
     const accessoryWaste = 1 + wastePct;
@@ -1344,105 +1670,172 @@ export default class Engine {
       : "Chưa chọn";
     const color = this.currentPreset ? this.currentPreset.color : "#E3F2FD";
 
-    // 1. TÍNH TOÁN XƯƠNG GÀI (CARRIER)
-    // [UPDATE] Lấy chiều dài xương từ input (3m, 4m, 6m...)
+    // 1. CHẾ ĐỘ TÍNH TOÁN
+    const calcModeEl = document.getElementById("cfg_calcMode");
+    const calcMode = forceMode || (calcModeEl ? calcModeEl.value : "EXACT");
+
+    // Variables for BOQ output
+    let totalCarrierLen = 0,
+      carrierBarsOrder = 0,
+      carrierCouplers = 0;
+    let totalTrimLen = 0,
+      trimBarsOrder = 0;
+    let totalShadowLen = 0,
+      shadowBarsOrder = 0;
+    let totalFasciaLen = 0,
+      fasciaSegmentsOut = [];
+    let totalPoints = 0,
+      rodBarsOrder = 0,
+      totalRodMeters = 0;
+    let panelGroups = {},
+      totalPanelLen = 0,
+      spliceOrder = 0;
+
     const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-
-    const carrierSegments = this.state.carriers.map((c) => c.len);
-    const totalCarrierLen = carrierSegments.reduce((a, b) => a + b, 0);
-    const carrierBarsReal = this.calculateOptimizedBars(
-      carrierSegments,
-      carrierBarL,
-    );
-    const carrierBarsOrder = Math.ceil(carrierBarsReal * accessoryWaste);
-    const carrierCouplers = this.state.carriers.reduce(
-      (sum, c) => sum + Math.floor((c.len - 0.01) / carrierBarL),
-      0,
-    );
-
-    // 2. TÍNH TOÁN VIỀN (TRIMS)
-    const trimSegments = this.state.edges
-      .filter((e) => e.type === "WALL_V")
-      .map((e) =>
-        Math.sqrt(Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2)),
-      );
-
-    const totalTrimLen = trimSegments.reduce((a, b) => a + b, 0);
-    const trimBarsReal = this.calculateOptimizedBars(
-      trimSegments,
-      CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-    );
-    const trimBarsOrder = Math.ceil(trimBarsReal * accessoryWaste);
-
-    // [NEW] TÍNH TOÁN SHADOW GAP (Z-PROFILE)
-    const shadowSegments = this.state.edges
-      .filter((e) => e.type === "SHADOW")
-      .map((e) =>
-        Math.sqrt(Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2)),
-      );
-
-    const totalShadowLen = shadowSegments.reduce((a, b) => a + b, 0);
-    // Giả sử thanh Shadow cũng dài 3m giống V-Góc (hoặc lấy từ CONST)
-    const shadowBarsReal = this.calculateOptimizedBars(
-      shadowSegments,
-      CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-    );
-    const shadowBarsOrder = Math.ceil(shadowBarsReal * accessoryWaste);
-
-    // 3. TÍNH TOÁN FASCIA
-    const fasciaSegments = this.state.edges
-      .filter((e) => e.type === "FASCIA")
-      .map((e) =>
-        Math.sqrt(Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2)),
-      );
-    const totalFasciaLen = fasciaSegments.reduce((a, b) => a + b, 0);
-
-    // 4. HỆ TREO
-    const totalPoints = this.state.hangers.length;
-    // [UPDATE] Lấy chiều dài Ty trung bình từ input, mặc định 1.0m
     const avgHangerLen = this.getInputValue("cfg_hangerL", 0.1, 10.0, 1.0);
-    const BAR_LEN_ROD = 3.0; // [UPDATE] Ty ren khổ tiêu chuẩn 3m (theo yêu cầu user)
-
-    const totalRodMeters = totalPoints * avgHangerLen;
-    const rodBarsOrder = Math.ceil(
-      (totalRodMeters * accessoryWaste) / BAR_LEN_ROD,
-    );
-
-    // 5. TẤM TRẦN (PANELS) & SPLICER
-    // Tấm đã được tính toán cắt và nối trong calculate() (this.state.strips)
-    // Cần tổng hợp lại số liệu
-    let panelGroups = {};
-    let spliceCount = 0;
-    let totalPanelLen = 0;
-
-    this.state.strips.forEach((strip) => {
-      totalPanelLen += strip.totalLen;
-      spliceCount += strip.splices || 0;
-
-      // Gom nhóm các mảnh tấm
-      strip.pieces.forEach((p) => {
-        // Gom theo chiều dài
-        let key = p.len.toFixed(2);
-        if (!panelGroups[key]) panelGroups[key] = { qty: 0, status: p.status };
-        panelGroups[key].qty++;
-      });
-    });
-
-    // Splicer bổ sung từ Fascia
-    // Fascia > MaxL thì cũng cần splicer
-    // ... logic cũ có tính fascia splicer, ở đây ta đơn giản hóa hoặc add thêm vào.
-    // Trong code cũ: spliceCount += numParts - 1; cho Fascia.
+    const BAR_LEN_ROD = 3.0;
     const maxTransLimit = this.getInputValue("cfg_maxTrans") || 12.0;
-    let fasciaSplice = 0;
 
-    fasciaSegments.forEach((len) => {
-      if (len > maxTransLimit) {
-        fasciaSplice += Math.ceil(len / maxTransLimit) - 1;
-      }
-    });
+    if (calcMode === "NORM") {
+      // ===== [CHẾ ĐỘ NORM] TÍNH THEO ĐỊNH MỨC =====
+      const geomArea = this.getPolygonArea();
+      const geomPerim = this.getPolygonPerimeter();
 
-    const totalSplice = spliceCount + fasciaSplice;
-    const spliceOrder = Math.ceil(totalSplice * accessoryWaste);
+      const cX = this.getInputValue("cfg_cX", 0.5, 5.0, 1.0, true);
+      const tY = this.getInputValue("cfg_tY", 0.5, 5.0, 1.0, true);
+      const pW = this.getInputValue("cfg_pW", 10, 1000, 100, true) / 1000;
+      const gW = this.getInputValue("cfg_gW", 0, 500, 0, true) / 1000;
+
+      this.totalArea = geomArea; // Set overall area strictly to mathematical geometry area
+
+      // Xương gài
+      totalCarrierLen = geomArea / cX;
+      carrierBarsOrder = Math.ceil(
+        (totalCarrierLen * accessoryWaste) / carrierBarL,
+      );
+      carrierCouplers = Math.ceil(totalCarrierLen / carrierBarL);
+
+      // Viền & Phụ kiện viền
+      totalTrimLen = geomPerim;
+      trimBarsOrder = Math.ceil(
+        (totalTrimLen * accessoryWaste) / CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
+      );
+
+      const hasShadow = this.state.edges.some((e) => e.type === "SHADOW");
+      totalShadowLen = hasShadow ? geomPerim : 0;
+      shadowBarsOrder = hasShadow
+        ? Math.ceil(
+            (totalShadowLen * accessoryWaste) /
+              CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
+          )
+        : 0;
+
+      const hasFascia = this.state.edges.some((e) => e.type === "FASCIA");
+      totalFasciaLen = hasFascia ? geomPerim : 0;
+      if (hasFascia) fasciaSegmentsOut.push(totalFasciaLen);
+
+      // Hệ treo (Hangers)
+      totalPoints = Math.ceil(geomArea / (cX * tY));
+      totalRodMeters = totalPoints * avgHangerLen;
+      rodBarsOrder = Math.ceil((totalRodMeters * accessoryWaste) / BAR_LEN_ROD);
+
+      // Tấm Trần (Panels)
+      totalPanelLen = geomArea / (pW + gW);
+      panelGroups[totalPanelLen.toFixed(2)] = { qty: 1, status: "OK" };
+
+      const panelMaxL = this.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true);
+      let spliceCount = Math.ceil(totalPanelLen / panelMaxL) - 1;
+      if (spliceCount < 0) spliceCount = 0;
+      let fasciaSplice = hasFascia
+        ? Math.ceil(totalFasciaLen / maxTransLimit) - 1
+        : 0;
+      if (fasciaSplice < 0) fasciaSplice = 0;
+
+      spliceOrder = Math.ceil((spliceCount + fasciaSplice) * accessoryWaste);
+    } else {
+      // ===== [CHẾ ĐỘ EXACT] TÍNH THEO KÍCH THƯỚC BẢN VẼ THỰC TẾ =====
+
+      // 1. TÍNH TOÁN XƯƠNG GÀI (CARRIER)
+      const carrierSegments = this.state.carriers.map((c) => c.len);
+      totalCarrierLen = carrierSegments.reduce((a, b) => a + b, 0);
+      const carrierBarsReal = this.calculateOptimizedBars(
+        carrierSegments,
+        carrierBarL,
+      );
+      carrierBarsOrder = Math.ceil(carrierBarsReal * accessoryWaste);
+      carrierCouplers = this.state.carriers.reduce(
+        (sum, c) => sum + Math.floor((c.len - 0.01) / carrierBarL),
+        0,
+      );
+
+      // 2. TÍNH TOÁN VIỀN (TRIMS)
+      const trimSegments = this.state.edges
+        .filter((e) => e.type === "WALL_V")
+        .map((e) =>
+          Math.sqrt(
+            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
+          ),
+        );
+      totalTrimLen = trimSegments.reduce((a, b) => a + b, 0);
+      const trimBarsReal = this.calculateOptimizedBars(
+        trimSegments,
+        CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
+      );
+      trimBarsOrder = Math.ceil(trimBarsReal * accessoryWaste);
+
+      // [NEW] TÍNH TOÁN SHADOW GAP (Z-PROFILE)
+      const shadowSegments = this.state.edges
+        .filter((e) => e.type === "SHADOW")
+        .map((e) =>
+          Math.sqrt(
+            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
+          ),
+        );
+      totalShadowLen = shadowSegments.reduce((a, b) => a + b, 0);
+      const shadowBarsReal = this.calculateOptimizedBars(
+        shadowSegments,
+        CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
+      );
+      shadowBarsOrder = Math.ceil(shadowBarsReal * accessoryWaste);
+
+      // 3. TÍNH TOÁN FASCIA
+      const fasciaSegments = this.state.edges
+        .filter((e) => e.type === "FASCIA")
+        .map((e) =>
+          Math.sqrt(
+            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
+          ),
+        );
+      totalFasciaLen = fasciaSegments.reduce((a, b) => a + b, 0);
+      fasciaSegmentsOut = fasciaSegments;
+
+      // 4. HỆ TREO
+      totalPoints = this.state.hangers.length;
+      totalRodMeters = totalPoints * avgHangerLen;
+      rodBarsOrder = Math.ceil((totalRodMeters * accessoryWaste) / BAR_LEN_ROD);
+
+      // 5. TẤM TRẦN (PANELS) & SPLICER
+      let spliceCount = 0;
+      this.state.strips.forEach((strip) => {
+        totalPanelLen += strip.totalLen;
+        spliceCount += strip.splices || 0;
+        strip.pieces.forEach((p) => {
+          let key = p.len.toFixed(2);
+          if (!panelGroups[key])
+            panelGroups[key] = { qty: 0, status: p.status };
+          panelGroups[key].qty++;
+        });
+      });
+
+      let fasciaSplice = 0;
+      fasciaSegments.forEach((len) => {
+        if (len > maxTransLimit) {
+          fasciaSplice += Math.ceil(len / maxTransLimit) - 1;
+        }
+      });
+      const totalSplice = spliceCount + fasciaSplice;
+      spliceOrder = Math.ceil(totalSplice * accessoryWaste);
+    }
 
     return {
       presetName,
@@ -1463,7 +1856,7 @@ export default class Engine {
       },
       fascia: {
         totalLen: totalFasciaLen.toFixed(2),
-        segments: fasciaSegments, // có thể cần chi tiết
+        segments: fasciaSegmentsOut, // Fixed ReferenceError
       },
       hangers: {
         total: totalPoints,
@@ -1495,15 +1888,25 @@ export default class Engine {
     // [FIX] Define carrierBarL for display
     const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
 
-    const metrics = this.calculateBOQData();
+    // [TÍNH KÉP CẢ 2 CHẾ ĐỘ CHO SO SÁNH]
+    const currentMode =
+      document.getElementById("cfg_calcMode")?.value || "EXACT";
+    const metricsExact = this.calculateBOQData("EXACT");
+    const metricsNorm = this.calculateBOQData("NORM");
 
-    // Helper to create editable row
-    const row = (name, unit, val, isBold = false) => `
+    // Default metrics to current mode for panels and total displays
+    const metrics = currentMode === "NORM" ? metricsNorm : metricsExact;
+
+    // Helper to create editable comparison row
+    const row = (name, unit, valExact, valNorm, isBold = false) => `
       <tr>
           <td style="padding:4px;"><input type="text" class="boq-inp name ${isBold ? "bold" : ""}" value="${name}"></td>
           <td align="center" style="padding:4px;"><input type="text" class="boq-inp unit" value="${unit}" style="text-align:center; width:60px"></td>
           <td align="right" style="padding:4px;">
-            <input type="text" class="boq-inp val ${isBold ? "bold" : ""}" value="${val}" style="text-align:right; width:80px">
+            <input type="text" class="boq-inp val ${isBold ? "bold" : ""}" value="${valNorm}" style="text-align:right; width:70px; color:#1976D2; background:#F8FAFC" title="Tính theo Định mức (Lý thuyết)" readonly>
+          </td>
+          <td align="right" style="padding:4px;">
+            <input type="text" class="boq-inp val ${isBold ? "bold" : ""}" value="${valExact}" style="text-align:right; width:70px; color:#E65100; background:#FFF8E1" title="Tính theo Kích thước Thực tế (Shopdrawing)" readonly>
           </td>
       </tr>
     `;
@@ -1515,36 +1918,47 @@ export default class Engine {
                 TỔNG DIỆN TÍCH: ${metrics.totalArea} m²
             </div>
             <div style="color: #546E7A; font-size: 13px; margin-top: 5px;">
-                Hệ trần: <b>${metrics.presetName}</b> | Màu: ${metrics.color}
+                Hệ trần: <b>${metrics.presetName}</b> | Màu: ${metrics.color} | Chế độ Đang chọn: <b>${currentMode === "NORM" ? "Định mức" : "Thực tế"}</b>
             </div>
             <div style="font-style:italic; font-size:12px; color:#d32f2f; margin-top:5px">
-              * Bạn có thể sửa trực tiếp Tên và Số lượng bên dưới trước khi xuất file.
+              * Bảng này cho phép đối chiếu trực tiếp sự chênh lệch (Hao hụt) giữa 2 phương pháp tính toán.
             </div>
         </div>
 
-        <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px; color: #E65100;">1. KẾT CẤU KHUNG XƯƠNG</h4>
+        <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px; color: #E65100; display:flex; justify-content:space-between;">
+            <span>1. KẾT CẤU KHUNG XƯƠNG</span>
+            <span style="font-size:11px; font-weight:normal; color:#666">* Click nút XUẤT QS để tải Excel</span>
+        </h4>
         <table id="boq-table-main" style="width:100%; border-collapse: collapse; margin-bottom:20px; font-size:13px">
             <tr style="background:#ECEFF1;">
                 <th style="text-align:left; padding:8px;">Tên Vật Tư</th>
-                <th style="padding:8px; width:80px">ĐVT</th>
-                <th style="text-align:right; padding:8px; width:100px">SL Đặt hàng</th>
+                <th style="padding:8px; width:80px; text-align:center">ĐVT</th>
+                <th style="text-align:right; padding:8px; width:90px; color:#0D47A1;">SL ĐỊNH MỨC</th>
+                <th style="text-align:right; padding:8px; width:90px; color:#E65100;">SL THỰC TẾ</th>
             </tr>
-            ${row(`Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm)`, "m2", metrics.totalArea, true)}
-            ${row(`Thanh xương (${carrierBarL}m)`, "Cây", metrics.carriers.bars, true)}
-            ${row("Thanh V-Góc (3m)", "Cây", metrics.trims.bars, true)}
+            ${row(`Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm)`, "m2", metricsExact.totalArea, metricsNorm.totalArea, true)}
+            ${row(`Thanh xương (${carrierBarL}m)`, "Cây", metricsExact.carriers.bars, metricsNorm.carriers.bars, true)}
+            ${row("Thanh V-Góc (3m)", "Cây", metricsExact.trims.bars, metricsNorm.trims.bars, true)}
             ${
-              metrics.shadowTrims && metrics.shadowTrims.bars > 0
+              metricsExact.shadowTrims && metricsExact.shadowTrims.bars > 0
                 ? row(
                     "Thanh Shadow Gap (3m)",
                     "Cây",
-                    metrics.shadowTrims.bars,
+                    metricsExact.shadowTrims.bars,
+                    metricsNorm.shadowTrims.bars,
                     true,
                   )
                 : ""
             }
              ${
-               metrics.fascia && metrics.fascia.totalLen > 0
-                 ? row("Mặt dựng Fascia", "md", metrics.fascia.totalLen, true)
+               metricsExact.fascia && metricsExact.fascia.totalLen > 0
+                 ? row(
+                     "Mặt dựng Fascia",
+                     "md",
+                     metricsExact.fascia.totalLen,
+                     metricsNorm.fascia.totalLen,
+                     true,
+                   )
                  : ""
              }
         </table>
@@ -1553,14 +1967,15 @@ export default class Engine {
         <table id="boq-table-acc" style="width:100%; border-collapse: collapse; margin-bottom:20px; font-size:13px">
             <tr style="background:#f5f5f5;">
                 <th style="text-align:left; padding:8px;">Tên Phụ Kiện</th>
-                <th style="padding:8px; width:80px">ĐVT</th>
-                <th style="text-align:right; padding:8px; width:100px">Số Lượng</th>
+                <th style="padding:8px; width:80px; text-align:center">ĐVT</th>
+                <th style="text-align:right; padding:8px; width:90px; color:#0D47A1;">SL ĐỊNH MỨC</th>
+                <th style="text-align:right; padding:8px; width:90px; color:#E65100;">SL THỰC TẾ</th>
             </tr>
-            ${row("Khóa nối xương", "Cái", metrics.carriers.couplers, true)}
-            ${row("Móc treo xương", "Cái", metrics.hangers.details.mocTreoXuong, true)}
-            ${row("Ty ren (3m)", "Cây", metrics.hangers.tyRenBars, true)}
-            ${row("Bộ Nở đạn + Ecu", "Bộ", metrics.hangers.details.noDan, true)}
-            ${metrics.accessories.splicer > 0 ? row("Splicer (Nối tấm)", "Cái", metrics.accessories.splicer, true) : ""}
+            ${row("Khóa nối xương", "Cái", metricsExact.carriers.couplers, metricsNorm.carriers.couplers, true)}
+            ${row("Móc treo xương", "Cái", metricsExact.hangers.details.mocTreoXuong, metricsNorm.hangers.details.mocTreoXuong, true)}
+            ${row("Ty ren (3m)", "Cây", metricsExact.hangers.tyRenBars, metricsNorm.hangers.tyRenBars, true)}
+            ${row("Bộ Nở đạn + Ecu", "Bộ", metricsExact.hangers.details.noDan, metricsNorm.hangers.details.noDan, true)}
+            ${metricsExact.accessories.splicer > 0 ? row("Splicer (Nối tấm)", "Cái", metricsExact.accessories.splicer, metricsNorm.accessories.splicer, true) : ""}
         </table>
 
          <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px;">3. CHI TIẾT CẮT TẤM (SẢN XUẤT)</h4>
@@ -2193,6 +2608,8 @@ export default class Engine {
       edgeTypes, // [EDGES] Loại viền (WALL_V, SHADOW, FASCIA, NONE)
       // [NEW] Save Preset Name explicitly
       presetName: this.currentPreset ? this.currentPreset.name : "Custom",
+      // [NEW] Save Manual Joints
+      manualJointsMap: { ...this.state.manualJointsMap },
     };
   }
 
@@ -2220,6 +2637,9 @@ export default class Engine {
         color: data.inputs?.newPresetColor || "#E3F2FD",
       };
     }
+
+    // [NEW] Restore Manual Joints
+    this.state.manualJointsMap = data.manualJointsMap || {};
 
     // [BƯỚC 2] RESTORE GEOMETRY - Khôi phục mặt bằng
     // [KHÁC BIỆT] Tuỳ vào mode (PRESET hay FREE) → cách khôi phục khác nhau
@@ -2335,18 +2755,43 @@ export default class Engine {
     // [TỔNG HỢP] Tạo stats object chứa tất cả thống kê
     // [UPDATE] Use full metrics from calculateBOQData to capture accessories
     const metrics = this.calculateBOQData();
+    const calcMode = document.getElementById("cfg_calcMode")?.value || "EXACT";
+
+    // Khởi tạo các biến lưu trữ Final
+    let finalPanels = panels;
+    let finalFascia = fascia;
+    let finalCarrierSegments = carrierSegments;
+    let finalTotalLinear = totalLinear;
+    let finalCarrierLen = carrierLen;
+    let finalWallV = wallV;
+    let finalShadow = shadow;
+    let finalHangers = hangers;
+
+    // Ghi đè bằng dữ liệu nếu là chế độ định mức
+    if (calcMode === "NORM") {
+      finalTotalLinear = Number(metrics.panels.totalLen) || 0;
+      finalCarrierLen = Number(metrics.carriers.totalLen) || 0;
+      finalWallV = Number(metrics.trims.totalLen) || 0;
+      finalShadow = Number(metrics.shadowTrims.totalLen) || 0;
+      finalHangers = Number(metrics.hangers.total) || 0;
+
+      finalPanels = [finalTotalLinear]; // gom thành 1 thanh dài
+      finalFascia = [Number(metrics.fascia.totalLen) || 0];
+      finalCarrierSegments = [finalCarrierLen];
+    }
+
     const stats = {
-      panels, // [PANELS] Mảng chiều dài tấm
-      fascia, // [FASCIA] Mảng chiều dài fascia
-      carrierSegments, // [NEW] Mảng chiều dài xương (cho tối ưu cắt)
-      totalLinear, // [TỔNG] Tổng chiều dài tấm
-      carrierLen, // [KẾTCẤU] Tổng chiều dài xương
-      wallV, // [VIỀN] V-Góc
-      shadow, // [VIỀN] Shadow
-      hangers, // [KẾTCẤU] Số ty
+      panels: finalPanels, // [PANELS] Mảng chiều dài tấm
+      fascia: finalFascia, // [FASCIA] Mảng chiều dài fascia
+      carrierSegments: finalCarrierSegments, // [NEW] Mảng chiều dài xương (cho tối ưu cắt)
+      totalLinear: finalTotalLinear, // [TỔNG] Tổng chiều dài tấm
+      carrierLen: finalCarrierLen, // [KẾTCẤU] Tổng chiều dài xương
+      wallV: finalWallV, // [VIỀN] V-Góc
+      shadow: finalShadow, // [VIỀN] Shadow
+      hangers: finalHangers, // [KẾTCẤU] Số ty
       brackets, // [KẾTCẤU] Số brae
       isFacade, // [FLAG] Có fascia không
-      // [NEW] Accessories Data
+      calcMode, // [CHẾ ĐỘ] Ghi lại phương pháp
       accessories: metrics, // Store full metrics for detailed BOQ
     };
 
@@ -2441,6 +2886,350 @@ export default class Engine {
   // [CÔNG DỤNG] Hiển thị tất cả zones dưới dạng danh sách có nút Edit/Delete
   // [THI CÔNG] Dùng để duyệt, chọn, sửa, xóa phòng trong project
   // [OUTPUT] HTML danh sách zones → insert vào DOM element #projectList
+
+  // ============ NEW: JOINT ADJUSTMENT LOGIC ============
+
+  // 1. Cập nhật cấu hình Pattern từ UI
+  updateJointConfig() {
+    const pattern = document.getElementById("cfg_joint_pattern").value;
+    const shift =
+      parseFloat(document.getElementById("cfg_joint_shift").value) / 100;
+
+    // Update state
+    this.state.jointConfig.pattern = pattern;
+    this.state.jointConfig.patternShift = isNaN(shift) ? 0.5 : shift;
+
+    // UI Control: Show/Hide Shift input for Brick mode
+    const brickRow = document.getElementById("row_brick_shift");
+    if (brickRow) {
+      brickRow.style.display = pattern === "BRICK" ? "flex" : "none";
+    }
+
+    this.calculate();
+  }
+
+  // --- JOINT DRAGGING & SNAPPING LOGIC ---
+
+  // A. Start Drag (Called from onMouseDown)
+  handleJointDown(e) {
+    if (!this.state.isJointEditing) return false;
+
+    const m = this.getMouse(e);
+    const CLICK_TOLERANCE = 0.3;
+
+    // Check Manual Joints
+    // We need to find if we clicked on an existing manual joint
+    let hit = null;
+
+    this.state.strips.forEach((strip, sIdx) => {
+      if (hit) return;
+
+      const key = strip.pos.toFixed(3);
+      const joints = this.state.manualJointsMap[key] || [];
+
+      // DEBUG LOG
+      // console.log(`Checking Strip ${key}, Joints:`, joints);
+
+      // Check strip bounds first
+      let stripCenter = strip.isVert
+        ? strip.pos + strip.width / 2
+        : strip.pos + strip.width / 2;
+      let mCross = strip.isVert ? m.x : m.y;
+      let mMain = strip.isVert ? m.y : m.x;
+
+      if (Math.abs(mCross - stripCenter) > strip.width / 2 + 0.1) return;
+      if (mMain < strip.start || mMain > strip.end) return;
+
+      let mousePosOnLen = mMain - strip.start;
+      // console.log(`Hit Strip ${key}, Mouse: ${mousePosOnLen}`);
+
+      // Find joint
+      const jIdx = joints.findIndex(
+        (j) => Math.abs(j - mousePosOnLen) < CLICK_TOLERANCE,
+      );
+
+      if (jIdx !== -1) {
+        console.log("JOINT HIT FOUND!", key, jIdx);
+        hit = {
+          stripKey: key,
+          stripStart: strip.start,
+          stripEnd: strip.end,
+          stripIsVert: strip.isVert,
+          jointIdx: jIdx,
+          val: joints[jIdx],
+          initialVal: joints[jIdx],
+          hasMoved: false, // [NEW] Track if actually dragged
+        };
+      }
+    });
+
+    if (hit) {
+      this.state.draggingJoint = hit;
+      // this.showFeedback("Bắt đầu kéo điểm nối...", "info");
+      return true; // Consumed event
+    }
+
+    // If no hit, maybe we want to ADD one and drag it immediately?
+    // For now, simple click adds, drag moves existing.
+    return false;
+  }
+
+  // B. Drag Move (Called from onMove)
+  handleJointDrag(e) {
+    if (!this.state.draggingJoint) return false;
+
+    const m = this.getMouse(e);
+    const d = this.state.draggingJoint;
+
+    // Calculate new raw position relative to strip start
+    let rawVal = (d.stripIsVert ? m.y : m.x) - d.stripStart;
+
+    // Clamp
+    if (rawVal < 0) rawVal = 0;
+    const stripLen = d.stripEnd - d.stripStart;
+    if (rawVal > stripLen) rawVal = stripLen;
+
+    // --- SNAP LOGIC ---
+    // Convert local value back to global coordinate to check against Valid Snap Points (Wall Corners)
+    let globalPos = d.stripStart + rawVal;
+    let isVertStrip = d.stripIsVert; // Strip is vertical -> Joint cut is HORIZONTAL line at Y
+    // Wait, if strip is vertical, joint cuts across it (Horizontal line).
+    // We align this Horizontal cut with Horizontal Wall Edges or Vertices Y.
+
+    const SNAP_DIST = 0.2; // 20cm
+    let snappedVal = null;
+
+    // 1. Snap to Wall Vertices (Corners)
+    // Check against Y if Vertical Strip, X if Horizontal Strip
+    for (let p of this.state.points) {
+      const target = isVertStrip ? p.y : p.x;
+      if (Math.abs(globalPos - target) < SNAP_DIST) {
+        globalPos = target;
+        snappedVal = globalPos; // Found snap
+        break;
+      }
+    }
+
+    // 2. Snap to Wall Edges (Horizontal/Vertical Lines)
+    // U-Shape Base is a Horizontal Line.
+    if (snappedVal === null) {
+      for (let e of this.state.edges) {
+        // If Strip is Vertical -> We cut Horizontal line -> Look for Horizontal Wall Edges
+        // Horizontal Wall Edge: p1.y == p2.y
+
+        if (isVertStrip) {
+          // Checking Horizontal Edges
+          if (Math.abs(e.p1.y - e.p2.y) < 0.01) {
+            // It's horizontal
+            const target = e.p1.y;
+            // Check if globalPos is close to this y
+            if (Math.abs(globalPos - target) < SNAP_DIST) {
+              globalPos = target;
+              snappedVal = globalPos;
+              break;
+            }
+          }
+        } else {
+          // Strip is Horizontal -> Cut Vertical -> Look for Vertical Wall Edges
+          if (Math.abs(e.p1.x - e.p2.x) < 0.01) {
+            // It's vertical
+            const target = e.p1.x;
+            if (Math.abs(globalPos - target) < SNAP_DIST) {
+              globalPos = target;
+              snappedVal = globalPos;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // Update snapped rawVal
+    // We need to convert globalPos back to local
+    // local = global - start
+    // But start might include offset. Snap works on global coords.
+
+    if (snappedVal !== null) {
+      rawVal = snappedVal - d.stripStart;
+      d.isSnapped = true;
+    } else {
+      d.isSnapped = false;
+    }
+
+    // Check if moved significantly
+    if (Math.abs(rawVal - d.initialVal) > 0.05) {
+      d.hasMoved = true;
+    }
+
+    // Update Joint Value in Map
+    // We update live to see visual feedback?
+    // Updating Map triggers re-calc? Recalc is heavy.
+    // Better: Update UI visual only (Ghost Joint), commit on Up.
+    // But user expects to see the cut moving.
+    // Let's update Map and Recalculate if performance allows (Throttle?)
+    // For < 100 panels, it's fast.
+
+    const joints = this.state.manualJointsMap[d.stripKey];
+    if (joints) {
+      joints[d.jointIdx] = rawVal;
+      this.calculate(); // Re-calc to show splits
+    }
+
+    return true;
+  }
+
+  // C. End Drag (Called from onUp)
+  handleJointUp() {
+    if (this.state.draggingJoint) {
+      const d = this.state.draggingJoint;
+      this.state.draggingJoint = null;
+
+      if (!d.hasMoved) {
+        // Treated as Click -> REMOVE JOINT
+        const joints = this.state.manualJointsMap[d.stripKey];
+        if (joints) {
+          joints.splice(d.jointIdx, 1);
+          this.calculate();
+          this.showFeedback("Đã xóa điểm nối", "warning");
+        }
+      } else {
+        this.showFeedback("Đã chỉnh vị trí điểm nối", "success");
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // 2. Chuyển chế độ EDIT JOINTS
+  toggleJointEditMode() {
+    // Toggle
+    this.state.isJointEditing = !this.state.isJointEditing;
+
+    const btn = document.getElementById("btn_toggle_joint_edit");
+    const hint = document.getElementById("hint_joint_edit");
+
+    if (this.state.isJointEditing) {
+      btn.classList.add("btn-active"); // Style active
+      btn.innerHTML = `<i data-lucide="scissors" class="icon-xs"></i> Đang chỉnh nối... (Click để thoát)`;
+      if (hint) hint.classList.remove("hidden");
+      this.showFeedback("Chế độ chỉnh điểm nối: BẬT", "info");
+    } else {
+      btn.classList.remove("btn-active");
+      btn.innerHTML = `<i data-lucide="scissors" class="icon-xs"></i> Chỉnh điểm nối (Manual)`;
+      if (hint) hint.classList.add("hidden");
+      this.showFeedback("Chế độ chỉnh điểm nối: TẮT", "info");
+    }
+
+    this.draw(); // Redraw UI hints
+  }
+
+  // 3. Xóa tất cả điểm nối thủ công
+  clearManualJoints() {
+    const hasJoints =
+      this.state.manualJointsMap &&
+      Object.keys(this.state.manualJointsMap).some(
+        (k) => this.state.manualJointsMap[k].length > 0,
+      );
+    if (!hasJoints) {
+      this.showFeedback("Chưa có điểm nối thủ công nào để xóa!", "warning");
+      return;
+    }
+    if (confirm("Bạn có chắc chắn muốn xóa TẤT CẢ điểm nối thủ công đã vẽ?")) {
+      this.state.manualJointsMap = {};
+      this.calculate();
+      this.showFeedback("Đã xóa toàn bộ điểm nối thủ công", "success");
+    }
+  }
+
+  // 3. Xử lý Click thêm/xóa khớp nối (được gọi từ onDown)
+  handleJointClick(m) {
+    if (!this.state.isJointEditing) return false;
+
+    let actionTaken = false;
+    const CLICK_TOLERANCE = 0.3; // 30cm tolerance
+
+    // Duyệt qua từng strip để xem có click vào strip nào không
+    this.state.strips.forEach((strip) => {
+      // Check nếu điểm click nằm trong phạm vi strip (theo chiều rộng)
+      // Strip geometry
+      let stripMin, stripMax, stripCenter, mousePosOnLen;
+
+      if (strip.isVert) {
+        // Dọc: Pos là X, Length là Y
+        stripCenter = strip.pos + strip.width / 2;
+        if (Math.abs(m.x - stripCenter) > strip.width / 2 + 0.1) return; // Not this strip (Width check)
+
+        if (m.y < strip.start || m.y > strip.end) return; // Not inside length
+
+        mousePosOnLen = m.y - strip.start; // Rel distance from start
+      } else {
+        // Ngang: Pos là Y, Length là X
+        stripCenter = strip.pos + strip.width / 2;
+        if (Math.abs(m.y - stripCenter) > strip.width / 2 + 0.1) return;
+
+        if (m.x < strip.start || m.x > strip.end) return;
+
+        mousePosOnLen = m.x - strip.start;
+      }
+
+      // A. Check xem có click trúng Joint cũ không -> XÓA
+      // Lấy config gốc của strip này (từ state.jointConfig hoặc strip.savedConfig)
+      // Lưu ý: strip object được recreate mỗi lần calculate(), nên ta cần cơ chế persist manual joints.
+      // Hiện tại ta chưa persist manual joints vào strip object INPUT của calculate.
+      // Ta cần lưu manual joints vào 1 map riêng hoặc trực tiếp vào strip object sau khi calculate xong?
+      // -> KHÔNG, calculate() XÓA và TẠO LẠI strips.
+      // -> GIẢI PHÁP: Cần 1 mảng manualJointsMap lưu ngoài, key là stripIndex.
+
+      // Tuy nhiên, stripIndex có thể thay đổi nếu resize phòng.
+      // Tạm thời: Lưu vào strip object hiện tại, và hy vọng logic calculate() không reset ???
+      // Wait, calculate() dòng 930: `this.state.strips = []`. NÓ SẼ RESET.
+      // -> Cần Persist Manual Joints trước khi Calculate reset chúng.
+      // -> Hoặc: Update `calculate` để giữ lại Manual Joints nếu topology không đổi?
+      // -> Challenge: Topology thay đổi liên tục khi resize.
+
+      // SIMPLIFICATION for V1:
+      // Chỉ support Manual Joint khi KHÔNG resize phòng/thay đổi kích thước.
+      // Ta sẽ lưu Manual Joints vào 1 mảng riêng `this.state.manualJointsMap = { stripPos: [joints...] }`
+      // Key là `strip.pos` (khá ổn định nếu không đổi origin/module).
+
+      if (!this.state.manualJointsMap) this.state.manualJointsMap = {};
+      const key = strip.pos.toFixed(3);
+      let currentJoints = this.state.manualJointsMap[key] || [];
+
+      // Check hit existing joint
+      const hitIdx = currentJoints.findIndex(
+        (j) => Math.abs(j - mousePosOnLen) < CLICK_TOLERANCE,
+      );
+
+      if (hitIdx !== -1) {
+        // HIT -> REMOVE
+        currentJoints.splice(hitIdx, 1);
+        this.showFeedback(
+          `Đã xóa điểm nối tại ${mousePosOnLen.toFixed(2)}m`,
+          "warning",
+        );
+        actionTaken = true;
+      } else {
+        // NO HIT -> ADD
+        // Add new joint
+        currentJoints.push(mousePosOnLen);
+        this.showFeedback(
+          `Đã thêm điểm nối tại ${mousePosOnLen.toFixed(2)}m`,
+          "success",
+        );
+        actionTaken = true;
+      }
+
+      // Save back
+      this.state.manualJointsMap[key] = currentJoints;
+    });
+
+    if (actionTaken) {
+      this.calculate(); // Recalculate with new joints
+      return true;
+    }
+    return false;
+  }
   // [VẼ DANH SÁCH PROJECT] - Updated for Lucide Icons
   renderProjectList() {
     const container = document.getElementById("projectList");
@@ -2728,5 +3517,474 @@ export default class Engine {
     };
 
     reader.readAsText(file);
+  }
+  // =========================================================
+  // [NEW] AutoCAD FEATURE IMPLEMENTATION
+  // =========================================================
+
+  setupCADListeners() {
+    // 1. Command Bar Input
+    const cmdInput = document.getElementById("cmd-input");
+    if (cmdInput) {
+      console.log("[AutoCAD] Command Input FOUND, attaching listeners.");
+      cmdInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          console.log("[AutoCAD] Command Enter:", cmdInput.value);
+          this.handleCommand(cmdInput.value);
+          cmdInput.value = ""; // Clear
+        }
+      });
+    } else {
+      console.error("[AutoCAD] Command Input NOT FOUND in DOM!");
+    }
+
+    // 2. Global Hotkeys (F8, Esc)
+    window.addEventListener("keydown", (e) => {
+      // Ortho Toggle (F8)
+      if (e.key === "F8") {
+        this.state.CMD.isOrtho = !this.state.CMD.isOrtho;
+        this.showFeedback(
+          `Ortho: ${this.state.CMD.isOrtho ? "ON" : "OFF"}`,
+          "info",
+        );
+        this.draw();
+      }
+      // Cancel (Esc)
+      if (e.key === "Escape") {
+        if (this.state.mode === "DRAW") {
+          this.finishDraw();
+          this.showFeedback("Drawing Finished", "success");
+        } else {
+          this.state.CMD.activeCmd = null;
+          this.showFeedback("Command Cancelled", "warning");
+        }
+        if (cmdInput) cmdInput.blur(); // Unfocus
+      }
+      // Quick Focus Command Bar (Space / Enter if not in input)
+      if (
+        (e.key === " " || e.key === "Enter") &&
+        document.activeElement !== cmdInput
+      ) {
+        // Only focus if idle or drawing
+        if (this.state.mode === "DRAW" || this.state.mode === "IDLE") {
+          if (cmdInput) {
+            cmdInput.focus();
+            e.preventDefault();
+          }
+        }
+      }
+    });
+  }
+
+  // CORE: Command Processor
+  handleCommand(inputStr) {
+    if (!inputStr) return;
+    if (this.state.inputMode !== "FREE") return; // Block commands if not in Free Draw logic
+
+    // [HISTORY] Add to history (UI update logic here if needed)
+    this.state.CMD.history.push(inputStr);
+
+    const parsed = CAD_UTILS.parseInput(inputStr);
+    const lastPt =
+      this.state.points.length > 0
+        ? this.state.points[this.state.points.length - 1]
+        : { x: 0, y: 0 };
+
+    // --- A. COMMANDS ---
+    if (parsed.type === "CMD") {
+      switch (parsed.val) {
+        case "L":
+        case "LINE":
+          this.resetDraw();
+          this.showFeedback("Line Tool Active", "info");
+          break;
+        case "C":
+        case "CLOSE":
+          if (this.state.mode === "DRAW") this.finishDraw();
+          break;
+        case "U":
+        case "UNDO":
+          if (this.state.points.length > 0) {
+            this.state.points.pop();
+            this.draw();
+          }
+          break;
+        case "Z":
+        case "ZOOM":
+          this.centerView();
+          this.showFeedback("Zoom Extents", "success");
+          break;
+        case "O":
+        case "OFFSET":
+          // Simple toggle offset mode visualization (implementation complex, alert for now)
+          alert(
+            "Offset Command: Chọn cạnh để offset (Tính năng đang phát triển)",
+          );
+          break;
+        case "M":
+        case "MOVE":
+          alert(
+            "Move Command: Chọn điểm để di chuyển (Tính năng đang phát triển)",
+          );
+          break;
+        case "REC":
+          this.resetDraw();
+          this.showFeedback("Rectangle Tool (Vẽ 4 điểm)", "info");
+          break;
+        default:
+          this.showFeedback(`Unknown command: ${parsed.val}`, "error");
+      }
+      return;
+    }
+
+    // --- B. COORDINATE ENTRY (DRAW MODE ONLY) ---
+    if (this.state.mode === "DRAW") {
+      let newPt = null;
+
+      // 1. Absolute Coord (x,y)
+      if (parsed.type === "ABS_COORD") {
+        newPt = { x: parsed.x, y: parsed.y };
+      }
+      // 2. Relative Coord (@x,y)
+      else if (parsed.type === "REL_COORD") {
+        newPt = { x: lastPt.x + parsed.x, y: lastPt.y + parsed.y };
+      }
+      // 3. Polar (@dist<ang)
+      else if (parsed.type === "POLAR") {
+        newPt = CAD_UTILS.calcDest(lastPt, parsed.dist, parsed.angle);
+      }
+      // 4. Direct Distance (Number)
+      else if (parsed.type === "DIST") {
+        // Calculate direction from LAST POINT to CURRENT MOUSE
+        // Vector = Mouse - Last
+        const dx = this.state.CMD.cursorPos.x - lastPt.x;
+        const dy = this.state.CMD.cursorPos.y - lastPt.y;
+        const currentAng = Math.atan2(dy, dx);
+
+        // Apply Ortho Snapping for Direct Distance too
+        let angle = currentAng;
+        if (this.state.CMD.isOrtho) {
+          // Snap angle to nearest 90 deg
+          angle = Math.round(currentAng / (Math.PI / 2)) * (Math.PI / 2);
+        }
+
+        newPt = {
+          x: lastPt.x + parsed.val * Math.cos(angle),
+          y: lastPt.y + parsed.val * Math.sin(angle),
+        };
+      }
+
+      if (newPt) {
+        this.state.points.push(newPt);
+        this.draw();
+        this.showFeedback(
+          `Point added at (${newPt.x.toFixed(2)}, ${newPt.y.toFixed(2)})`,
+          "success",
+        );
+      }
+    }
+  }
+
+  // [MODIFIED] Helper to draw UI overlay (Ghost lines, Tooltips)
+  drawCADOverlay() {
+    const ctx = this.ctx;
+    const t = this.state.CMD;
+    const lastPt =
+      this.state.points.length > 0
+        ? this.state.points[this.state.points.length - 1]
+        : null;
+
+    if (this.state.mode === "DRAW") {
+      const mouse = t.cursorPos;
+
+      // ALWAYS Show Tooltip if in DRAW mode
+      const tooltip = document.getElementById("cursor-tooltip");
+      if (tooltip) {
+        tooltip.classList.remove("hidden");
+        // Safe check for mouse before toScreen
+        if (mouse) {
+          const screenPos = this.toScreen(mouse);
+
+          // Offset tooltip 15px from cursor
+          tooltip.style.left = screenPos.x + 15 + "px";
+          tooltip.style.top = screenPos.y + 15 + "px";
+
+          if (lastPt) {
+            // We have a start point -> Show Dist/Angle
+            let target = { ...mouse };
+            // ORTHO Logic
+            if (t.isOrtho) {
+              const dx = Math.abs(mouse.x - lastPt.x);
+              const dy = Math.abs(mouse.y - lastPt.y);
+              if (dx > dy) target.y = lastPt.y;
+              else target.x = lastPt.x;
+            }
+
+            // Draw Ghost Line
+            const s1 = this.toScreen(lastPt);
+            const s2 = this.toScreen(target); // Recalculate screen pos for ortho target
+
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = "#0f62fe";
+            ctx.lineWidth = 1;
+            ctx.moveTo(s1.x, s1.y);
+            ctx.lineTo(s2.x, s2.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Distance & Angle
+            const dist = Math.sqrt(
+              Math.pow(target.x - lastPt.x, 2) +
+                Math.pow(target.y - lastPt.y, 2),
+            );
+            const angle = (
+              (Math.atan2(target.y - lastPt.y, target.x - lastPt.x) * 180) /
+              Math.PI
+            ).toFixed(1);
+
+            tooltip.innerHTML = `X: ${target.x.toFixed(2)}, Y: ${target.y.toFixed(2)}<br>
+                                    <span style="color:#4caf50">L: ${dist.toFixed(2)}m</span> <span style="color:#ffcc00">A: ${angle}°</span>
+                                    ${t.isOrtho ? "<br>[ORTHO]" : ""}`;
+          } else {
+            // No points yet -> "Specify first point"
+            tooltip.innerHTML = `Specify first point<br>X: ${mouse.x.toFixed(2)}, Y: ${mouse.y.toFixed(2)}`;
+          }
+        }
+      }
+    } else {
+      // Hide tooltip if not drawing
+      const tooltip = document.getElementById("cursor-tooltip");
+      if (tooltip) tooltip.classList.add("hidden");
+    }
+  }
+
+  // --- [NEW] JOINT DRAG & SNAP HANDLERS ---
+
+  // 1. Helper: Find Strip under Mouse
+  getStripFromPos(m) {
+    if (!this.state.strips || this.state.strips.length === 0) return null;
+    const hitW = (this.state.strips[0].width || 0.1) / 2; // Half Width
+
+    for (let s of this.state.strips) {
+      if (s.isVert) {
+        // Strip Vertical: pos is X center, range Y [start, end]
+        // Hit X: |m.x - (s.pos + hitW)| < hitW
+        // Hit Y: m.y >= s.start && m.y <= s.end
+        const centerX = s.pos + hitW;
+        if (Math.abs(m.x - centerX) < hitW && m.y >= s.start && m.y <= s.end) {
+          return { strip: s, key: s.pos.toFixed(3), isVert: true, centerX };
+        }
+      } else {
+        // Strip Horizontal
+        const centerY = s.pos + hitW;
+        if (Math.abs(m.y - centerY) < hitW && m.x >= s.start && m.x <= s.end) {
+          return { strip: s, key: s.pos.toFixed(3), isVert: false, centerY };
+        }
+      }
+    }
+    return null;
+  }
+
+  // 2. Handle Mouse Down on Joint (Start Drag)
+  handleJointDown(e) {
+    if (!this.state.isJointEditing) return false;
+    const m = this.getMouse(e);
+    const HIT_DIST = 0.2; // 20cm hit radius for joint
+
+    // Iterate all strips locally to find if we hit a joint
+    // Note: We use manualJointsMap directly because strips might be re-calculated
+    // but finding which strip is hit first is optimized
+    const hitStrip = this.getStripFromPos(m);
+    if (!hitStrip) return false;
+
+    // Check joints on this strip
+    // Explicit manual joints from Map
+    const manualJoints = this.state.manualJointsMap[hitStrip.key] || [];
+
+    // Find hit joint
+    let hitIndex = -1;
+    let hitVal = -1;
+
+    for (let i = 0; i < manualJoints.length; i++) {
+      const jVal = manualJoints[i]; // Distance from start relative to strip
+      // Abs Position of Joint:
+      let jAbsX, jAbsY;
+      if (hitStrip.isVert) {
+        jAbsX = hitStrip.centerX;
+        jAbsY = hitStrip.strip.start + jVal;
+      } else {
+        jAbsX = hitStrip.strip.start + jVal;
+        jAbsY = hitStrip.centerY;
+      }
+
+      // Distance Check
+      const dist = Math.sqrt(
+        Math.pow(m.x - jAbsX, 2) + Math.pow(m.y - jAbsY, 2),
+      );
+
+      if (dist < HIT_DIST) {
+        hitIndex = i;
+        hitVal = jVal;
+        break;
+      }
+    }
+
+    if (hitIndex !== -1) {
+      // START DRAG
+      this.state.dragJoint = {
+        stripKey: hitStrip.key,
+        val: hitVal,
+        startVal: hitVal,
+        isVert: hitStrip.isVert,
+        stripStart: hitStrip.strip.start,
+        hasMoved: false,
+      };
+
+      // Remove from Map temporarily (so it becomes "Ghost" tracked by dragJoint)
+      const newJoints = [...manualJoints];
+      newJoints.splice(hitIndex, 1);
+      this.state.manualJointsMap[hitStrip.key] = newJoints;
+
+      this.state.isDrag = false; // Disable Pan
+      // Trigger calc to remove the static joint (replaced by ghost in next draw)
+      this.calculate();
+      return true;
+    }
+
+    return false;
+  }
+
+  // 3. Handle Drag Move
+  handleJointDrag(e) {
+    if (!this.state.dragJoint) return false;
+
+    const m = this.getMouse(e);
+    const dj = this.state.dragJoint;
+
+    // Calculate new relative value
+    let newVal;
+    if (dj.isVert) {
+      newVal = m.y - dj.stripStart;
+    } else {
+      newVal = m.x - dj.stripStart;
+    }
+
+    // Clamp (Optional: Keep within strip bounds?)
+    // if (newVal < 0) newVal = 0; // Maybe allow slightly outside?
+
+    // SNAP LOGIC
+    this.state.snapLine = null;
+    const SNAP_DIST = 0.2; // 20cm snap
+
+    // Find nearest wall corner projected to this strip axis
+    let bestSnap = null;
+    let minDiff = Infinity;
+
+    // Use state.points (Wall Corners)
+    this.state.points.forEach((p) => {
+      // Project P onto Strip Axis
+      // If Strip is Vert, we care about P.y
+      // If Strip is Horz, we care about P.x
+
+      let projVal, diff;
+      if (dj.isVert) {
+        projVal = p.y - dj.stripStart; // Relative pos on strip
+        diff = Math.abs(newVal - projVal);
+      } else {
+        projVal = p.x - dj.stripStart;
+        diff = Math.abs(newVal - projVal);
+      }
+
+      if (diff < SNAP_DIST && diff < minDiff) {
+        minDiff = diff;
+        bestSnap = {
+          val: projVal, // The relative value to set
+          absVal: dj.stripStart + projVal, // Absolute pos for visual
+          type: dj.isVert ? "HOZS" : "VERT", // Snap Line Direction (Perpendicular to strip)
+          // Coordinate for marker
+          x: dj.isVert ? m.x : dj.stripStart + projVal,
+          y: dj.isVert ? dj.stripStart + projVal : m.y,
+        };
+      }
+    });
+
+    if (bestSnap) {
+      newVal = bestSnap.val;
+      this.state.snapLine = {
+        val: bestSnap.absVal, // Absolute coord for line
+        type: dj.isVert ? "HOZS" : "VERT", // Line orientation
+        x: bestSnap.x,
+        y: bestSnap.y,
+      };
+    }
+
+    // Update Drag State
+    // Only update if changed > 1mm to avoid excessive recalcs
+    if (Math.abs(newVal - dj.val) > 0.001) {
+      dj.hasMoved = true;
+      dj.val = newVal;
+      this.calculate(); // Re-calc strips with new joint pos
+    }
+
+    return true;
+  }
+
+  // 4. Handle Mouse Up (End Drag)
+  handleJointUp() {
+    if (this.state.dragJoint) {
+      const dj = this.state.dragJoint;
+
+      // Retrieve current list
+      let currentJoints = this.state.manualJointsMap[dj.stripKey] || [];
+
+      // Logic: If NOT moved significantly -> Treat as Click -> DELETE
+      // Wait! Using "hasMoved" might be too sensitive if user just clicks.
+      // If delete is desired, user should click without moving.
+
+      if (!dj.hasMoved) {
+        // DELETE ACTION
+        this.showFeedback("Đã xóa mối nối", "info");
+      } else {
+        // COMMIT ACTION
+        // Add back to map
+        if (dj.val > 0) {
+          // Only keep if valid
+          currentJoints.push(dj.val);
+          this.state.manualJointsMap[dj.stripKey] = currentJoints;
+        }
+      }
+
+      // Cleanup
+      this.state.dragJoint = null;
+      this.state.snapLine = null;
+      this.calculate();
+      return true;
+    }
+    return false;
+  }
+
+  // 5. Handle Click (Add Joint)
+  handleJointClick(m) {
+    if (!this.state.isJointEditing) return false;
+    // Only called if NOT dragging
+    const hit = this.getStripFromPos(m);
+    if (!hit) return false;
+
+    // Add new joint at click pos
+    let val;
+    if (hit.isVert) val = m.y - hit.strip.start;
+    else val = m.x - hit.strip.start;
+
+    if (val <= 0 || val >= hit.strip.totalLen) return false;
+
+    // Add to Map
+    let joints = this.state.manualJointsMap[hit.key] || [];
+    joints.push(val);
+    this.state.manualJointsMap[hit.key] = joints;
+
+    this.calculate();
+    this.showFeedback("Đã thêm mối nối", "success");
+    return true;
   }
 }
