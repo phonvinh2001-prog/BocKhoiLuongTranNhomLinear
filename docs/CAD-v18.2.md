@@ -1,3 +1,5 @@
+> Cập nhật v18.5: Enter trống / chuột phải hoàn tất hình hợp lệ; PL tự khép. Esc/Hủy/SELECT bỏ nháp. Xem [hướng dẫn mới](INTERACTION-v18.5.md).
+
 # Nhập dữ liệu và CAD v18.2 — bản kiểm tra
 
 Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Mã nguồn dùng ES Modules nên cần HTTP server. Không cần npm install. Kiểm tra bằng `node --test tests/regression.test.mjs tests/cad-workflow.test.mjs`.

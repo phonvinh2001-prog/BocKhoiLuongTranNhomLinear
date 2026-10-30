@@ -1430,19 +1430,8 @@ export default class Engine {
     this.calculate();this.centerView();this.draw();this.updateAddButtonUI();
   }
 
-  addToProject() {
-    if(this.state.points.length<3)return this.showFeedback('Chưa có vùng kín để lưu','error');
-    // [LẤYTEN] Tên phòng từ input "projectName", hoặc tự động "Zone 1, Zone 2,..."
-    const nameEl = document.getElementById("projectName");
-    const name =
-      nameEl && nameEl.value
-        ? nameEl.value.trim()
-        : `Zone ${this.state.projectZones.length + 1}`;
-
-    // [TÍNH TOÁN] Đảm bảo dữ liệu tính toán mới nhất
-    this.calculate();
-    if(!this.state.strips.length)return this.showFeedback("Biên/thông số chưa hợp lệ để lưu vùng","error");
-
+  // Build a saved result from the current calculation; no recalculation or UI mutation.
+  buildZoneRecord(name,id,suppliedMetrics=null) {
     // [BƯỚC 1] LẤY DỮ LIỆU TẤMTRẦN
     // [THỐNG KÊ] Tuyển tập chiều dài tất cả các mảnh tấm (sau cắt)
     const panels = [];
@@ -1496,7 +1485,7 @@ export default class Engine {
     // [TỔNG HỢP] Tạo stats object chứa tất cả thống kê
     // [TỔNG HỢP] Tạo stats object chứa tất cả thống kê
     // [UPDATE] Use full metrics from calculateBOQData to capture accessories
-    const metrics = this.calculateBOQData();
+    const metrics = suppliedMetrics||this.calculateBOQData();
     const calcMode = document.getElementById("cfg_calcMode")?.value || "EXACT";
 
     // Khởi tạo các biến lưu trữ Final
@@ -1544,12 +1533,30 @@ export default class Engine {
 
     // [BƯỚC 5] TẠO RECORD - Tạo object zone với đầy đủ thông tin
     const record = {
-      id: Date.now(), // [ID] Unique ID (timestamp)
+      id, // Stable region identity
       name, // [TÊN] Tên phòng
       ts: Date.now(), // [TIMESTAMP] Thời gian lưu
       savedState, // [SNAPSHOT] Snapshot tính toán lại khi load
       stats, // [THỐNG KÊ] Tóm tắt chiếu dài, số lượng, v.v
     };
+
+    return record;
+  }
+
+  addToProject() {
+    if(this.state.points.length<3)return this.showFeedback('Chưa có vùng kín để lưu','error');
+    // [LẤYTEN] Tên phòng từ input "projectName", hoặc tự động "Zone 1, Zone 2,..."
+    const nameEl = document.getElementById("projectName");
+    const name =
+      nameEl && nameEl.value
+        ? nameEl.value.trim()
+        : `Zone ${this.state.projectZones.length + 1}`;
+
+    // [TÍNH TOÁN] Đảm bảo dữ liệu tính toán mới nhất
+    this.calculate();
+    if(!this.state.strips.length)return this.showFeedback("Biên/thông số chưa hợp lệ để lưu vùng","error");
+
+    const record=this.buildZoneRecord(name,this.state.activeZoneId??this.state.projectZones[this.state.editingIndex]?.id??crypto.randomUUID());
 
     const wasEditing=this.state.editingIndex!==null;
     // [BƯỚC 6] LƯU VÀO DANH SÁCH
