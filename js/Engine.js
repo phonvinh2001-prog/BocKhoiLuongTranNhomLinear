@@ -35,6 +35,9 @@ import PreviewRenderer from "./PreviewRenderer.js"; // Nhập renderer cho previ
 import { CAD_UTILS } from "./CADParser.js";
 import { JointSolver } from "./JointSolver.js";
 
+import { distribute, splitRun, packCuts, structureForRuns, csvText, escapeHTML } from './QuantityRules.js';
+import { xlsxBytes, layoutDXF } from './ExportFormats.js';
+import { validateProject } from './ProjectData.js';
 export default class Engine {
   constructor() {
     this.cvs = document.getElementById("cvs");
@@ -101,6 +104,7 @@ export default class Engine {
     };
     // Initialize in PRESET mode (this will hide CMD bar)
     this.switchMode("PRESET");
+    this.applyPreset();
   }
 
   // [HELPER] Show feedback to user in UI
@@ -220,9 +224,9 @@ export default class Engine {
       // [NEW] Check Joint Click first
       const m = this.getMouse(e);
       // Check Drag Start
-      if (this.handleJointDown && this.handleJointDown(e)) return;
+      if (e.button === 0 && this.handleJointDown && this.handleJointDown(e)) return;
       // Check Click (Add/Remove) - Only if not dragging
-      if (this.handleJointClick && this.handleJointClick(m)) return;
+      if (e.button === 0 && this.handleJointClick && this.handleJointClick(m)) return;
 
       this.onDown(e);
     };
@@ -251,8 +255,8 @@ export default class Engine {
     this.bindClick("btn_boq", () => this.showBOQ());
     this.bindClick("btn_project_boq", () => this.showProjectBOQ());
     this.bindClick("btn_addProject", () => this.addToProject());
-    this.bindClick("btn_tab_preset", () => this.switchMode("PRESET"));
-    this.bindClick("btn_tab_free", () => this.switchMode("FREE"));
+
+
 
     // 2. Preset UI
     this.bindChange("shp_type", () => this.preset());
@@ -266,9 +270,11 @@ export default class Engine {
     this.bindChange("dim_u_arm_2", () => this.preset());
     this.bindChange("dim_u_base", () => this.preset());
 
+    document.querySelectorAll('[id^="cfg_"]').forEach(el=>{if(!["cfg_preset","cfg_dir","cfg_joint_pattern","cfg_joint_shift","cfg_calcMode"].includes(el.id))el.addEventListener("change",()=>this.calculate());});
+
     // 3. Config UI
-    this.bindChange("cfg_preset", () => this.applyPreset());
-    this.bindChange("cfg_dir", () => this.calculate());
+
+
   }
 
   // [HELPER] Safe Binding
@@ -317,6 +323,8 @@ export default class Engine {
       document.getElementById("cfg_pW").value = this.currentPreset.pW;
       document.getElementById("cfg_gW").value = this.currentPreset.gW;
       document.getElementById("cfg_maxL").value = this.currentPreset.maxL;
+      this.calculate();
+      this.autoSave();
       // Có thể thêm màu sắc nếu cần
     } else {
       this.currentPreset = null;
@@ -335,7 +343,7 @@ export default class Engine {
     this.userPresets.forEach((p, i) => {
       const div = document.createElement("div");
       div.style = "margin: 5px 0; padding: 5px; border: 1px solid #ccc;";
-      div.innerHTML = `${p.name} - ${p.pW}mm x ${p.gW}mm <button onclick="app.deletePreset(${i})">Xóa</button>`;
+      div.innerHTML = `${escapeHTML(p.name)} - ${p.pW}mm x ${p.gW}mm <button onclick="app.deletePreset(${i})">Xóa</button>`;
       list.appendChild(div);
     });
   }
@@ -348,35 +356,7 @@ export default class Engine {
     this.renderPresetList();
   }
 
-  saveNewPreset() {
-    const name = document.getElementById("newPresetName").value;
-    const pW = parseInt(document.getElementById("newPresetPW").value);
-    const gW = parseInt(document.getElementById("newPresetGW").value);
-    const maxL = parseFloat(document.getElementById("newPresetMaxL").value);
-    const color = document.getElementById("newPresetColor").value;
-    if (name && !isNaN(pW) && !isNaN(gW) && !isNaN(maxL)) {
-      const preset = { name, pW, gW, maxL, color };
-      this.userPresets.push(preset);
-      // [FIX] Use safe saveToStorage wrapper
-      saveToStorage("USER_PRESETS", this.userPresets);
-      this.updatePresetDropdown();
-      this.renderPresetList();
-      // [FIX] Use classList to hide modal
-      document.getElementById("presetModal").classList.add("hidden");
-      // Clear form
-      document.getElementById("newPresetName").value = "";
-      document.getElementById("newPresetPW").value = "";
-      document.getElementById("newPresetGW").value = "";
-      document.getElementById("newPresetMaxL").value = "";
-      document.getElementById("newPresetColor").value = "#E3F2FD";
 
-      this.showFeedback("Đã lưu mẫu mới thành công!", "success");
-    } else {
-      alert(
-        "Vui lòng nhập đầy đủ thông tin hợp lệ (Tên, Bản rộng, Khe hở, Dài max)!",
-      );
-    }
-  }
 
   resize() {
     this.cvs.width = this.cont.clientWidth;
@@ -602,64 +582,8 @@ export default class Engine {
   }
 
   // [HELPER] Auto-center view on drawing
-  centerView() {
-    if (this.state.points.length === 0) return;
 
-    // 1. Calculate Bounding Box
-    let minX = Infinity,
-      minY = Infinity;
-    let maxX = -Infinity,
-      maxY = -Infinity;
 
-    this.state.points.forEach((p) => {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    });
-
-    // 2. Add Padding (10%)
-    const padding = 1.0; // meters
-    const width = maxX - minX + padding * 2;
-    const height = maxY - minY + padding * 2;
-
-    // 3. Calculate Fit Scale
-    // [FIX] Fallback if canvas has no size yet (initial load)
-    const cvsW = this.cvs.width && this.cvs.width > 0 ? this.cvs.width : 800;
-    const cvsH = this.cvs.height && this.cvs.height > 0 ? this.cvs.height : 600;
-
-    const scaleX = cvsW / width;
-    const scaleY = cvsH / height;
-
-    // Use smaller scale to fit both dims
-    let finalScale = Math.min(scaleX, scaleY);
-
-    // Clamp Scale (Min 10px/m, Max 100px/m)
-    finalScale = Math.max(10, Math.min(finalScale, 100));
-
-    // 4. Calculate Pan to Center
-    // Center of drawing in world coords:
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-
-    // Pan calculation:
-    // ScreenCenter = CanvasW/2
-    // ScreenPos = WorldPos * Scale + Pan
-    // Pan = ScreenCenter - WorldCenter * Scale
-
-    this.state.scale = finalScale;
-    this.state.panX = cvsW / 2 - centerX * finalScale;
-    this.state.panY = cvsH / 2 - centerY * finalScale;
-
-    // [DEBUG] Log centering calculation
-    console.log(
-      `[CenterView] Canvas: ${cvsW}x${cvsH}, Scale: ${finalScale}, Pan: ${this.state.panX},${this.state.panY}`,
-    );
-
-    this.draw();
-  }
-
-  // [HELPER] Cập nhật preview panel
   updatePreview(shapeType, points) {
     const previewPanel = document.getElementById("preview-panel");
     if (!previewPanel) return;
@@ -744,7 +668,7 @@ export default class Engine {
     this.state.edges = this.state.points.map((p, i) => ({
       p1: p,
       p2: this.state.points[(i + 1) % this.state.points.length],
-      type: "WALL_V",
+      type: "NONE",
     }));
   }
 
@@ -955,7 +879,7 @@ export default class Engine {
   // --- TÍNH TOÁN CỐT LÕI (CORE CALCULATION) ---
   // [LUỒNG]: Rải tấm → Cắt tấm → Tính xương → Tính ty → Vẽ
   calculate() {
-    if (this.state.points.length < 3) return;
+    if (this.state.points.length < 3) {this.state.strips=[];this.state.carriers=[];this.state.hangers=[];return;}
 
     // [HÌNH U – THI CÔNG] Phát hiện hình U & lưu vào state
     this.state.shapeType = this.detectShapeType();
@@ -971,7 +895,7 @@ export default class Engine {
     const gW = this.getInputValue("cfg_gW", 0, 500, 0, true) / 1000; // Khe hở giữa tấm (m)
     const wGap = this.getInputValue("cfg_wGap", 0, 500, 0, true) / 1000; // Khe hở tường (m)
 
-    const maxL = this.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true); // Chiều dài nhôm tối đa (m)
+    const maxL = Math.min(this.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true), this.getInputValue("cfg_maxTrans", 0.5, 100, 12, true)); // Chiều dài nhôm tối đa (m)
     if (!maxL || maxL <= 0)
       return this.showFeedback(
         "Lỗi: Chiều dài nhôm max không hợp lệ!",
@@ -1023,9 +947,9 @@ export default class Engine {
 
           // [NEW] Lấy Manual Joints từ Map (nếu có)
           if (!this.state.manualJointsMap) this.state.manualJointsMap = {};
-          const stripKey = pos.toFixed(3);
+          const stripKey = pos.toFixed(3) + ":" + seg.start.toFixed(3);
           /* [MODIFIED] Clone array to allow injection of drag joint */
-          let manualJoints = [...(this.state.manualJointsMap[stripKey] || [])];
+          let manualJoints = [...(this.state.manualJointsMap[stripKey] || (segs.length===1?this.state.manualJointsMap[pos.toFixed(3)]:null) || [])];
 
           // [DRAG SUPPORT] Inject Dragging Joint temp
           if (
@@ -1076,26 +1000,9 @@ export default class Engine {
           // [SỬA LỖI 4] Điều chỉnh offset dựa trên loại viền tại 2 cạnh
           // [NGUYÊN NHÂN] V-Góc (25mm), Shadow (15mm), Fascia → độ dày khác nhau
           // [THI CÔNG] Phải để margin để tấm không va vào viền → offset >= thickness + 10mm
-          this.state.edges.forEach((e) => {
-            if (e.type === "WALL_V") {
-              // V-Góc dày ~25mm → offset >= 35mm (25+10mm margin)
-              const vAngleMinOffset = 0.035;
-
-              // Kiểm tra cạnh đầu strip
-              if (isVert && Math.abs(e.p1.y - seg.start) < 0.01) {
-                adjustedStart =
-                  seg.start + Math.max(minOffsetBoundary, vAngleMinOffset);
-              }
-              // Kiểm tra cạnh cuối strip
-              if (isVert && Math.abs(e.p1.y - seg.end) < 0.01) {
-                adjustedEnd =
-                  seg.end - Math.max(minOffsetBoundary, vAngleMinOffset);
-              }
-            }
-          });
-
           // [LƯU STRIP] Lưu thông tin dãy tấm này vào state
           this.state.strips.push({
+            key: stripKey,
             pos: pos, // Vị trí (X hoặc Y tùy hướng) của dãy tấm
             start: adjustedStart, // [SỬA LỖI 3,4] Điểm bắt đầu (áp dụng SAFE_DIST + edge offset)
             end: adjustedEnd, // [SỬA LỖI 3,4] Điểm kết thúc (áp dụng SAFE_DIST + edge offset)
@@ -1121,6 +1028,7 @@ export default class Engine {
     this.calcStructure(isVert, minX, maxX, minY, maxY);
 
     // [BƯỚC 6] VẼ & CẬP NHẬT UI
+    this.autoSave();
     this.draw();
     document.getElementById("coords").innerText =
       `Xong: ${this.state.strips.length} lines.`;
@@ -1130,161 +1038,26 @@ export default class Engine {
   // [THI CÔNG] Xương luôn vuông góc với Tấm (Linear system)
   // Thực tế: Tấm chạy dọc → Xương chạy ngang (và ngược lại)
   calcStructure(isPanelVert, minX, maxX, minY, maxY) {
-    this.state.carriers = [];
-    this.state.hangers = [];
-
-    // [ĐỌC THÔNG SỐ]
-    // [ĐỌC THÔNG SỐ]
-    // [FIX] Validate inputs using getInputValue
-    const cX = this.getInputValue("cfg_cX", 0.5, 5.0, 1.0, true); // Bước xương (m)
-    const tY = this.getInputValue("cfg_tY", 0.5, 5.0, 1.0, true); // Bước ty treo (m)
-
-    // [LOGIC LINEAR] Xương luôn vuông góc với Tấm
-    // Nếu Tấm dọc (isPanelVert=true) → Xương ngang (isCarrierVert=false)
-    const isCarrierVert = !isPanelVert;
-
-    const start = isCarrierVert ? minX : minY;
-    const end = isCarrierVert ? maxX : maxY;
-
-    // [BƯỚC 1] TÍNH VỊ TRÍ CÁC THANH XƯƠNG (CARRIERS)
-    // [THI CÔNG] Thanh xương được rải cách nhau "bước xương" (mặc định 1.0m)
-    // Nhưng cần dữ trừ khoảng 300mm từ tường (tiêu chuẩn an toàn)
-    const carrierPositions = this.getLinearDistribution(start, end, cX);
-
-    carrierPositions.forEach((pos) => {
-      // [BÓC TÁCH] Với mỗi vị trí xương, bắn tia để tìm giao cắt với tường
-      const segs = this.rayCast(pos, isCarrierVert);
-
-      segs.forEach((seg) => {
-        // [A] LƯU THÔNG TIN THANH XƯƠNG
-        // [THI CÔNG] Xương là thanh kim loại dài, treo tấm từ trần cũ xuống
-        // Độ dài = chiều dài từ tường này đến tường kia
-        this.state.carriers.push({
-          x1: isCarrierVert ? pos : seg.start,
-          y1: isCarrierVert ? seg.start : pos,
-          x2: isCarrierVert ? pos : seg.end,
-          y2: isCarrierVert ? seg.end : pos,
-          len: seg.end - seg.start, // Độ dài xương
-        });
-
-        // [B] TÍNH VỊ TRÍ TY TREO TRÊN THANH XƯƠNG NÀY
-        // [THI CÔNG] Ty treo = điểm treo xương từ trần cũ (dùng ê tô thép)
-        // Ty được rải cách nhau "bước ty treo" (mặc định 1.2m) để giữ xương không bị sag
-        const hangerPositions = this.getLinearDistribution(
-          seg.start,
-          seg.end,
-          tY,
-        );
-
-        hangerPositions.forEach((h) => {
-          this.state.hangers.push({
-            x: isCarrierVert ? pos : h,
-            y: isCarrierVert ? h : pos,
-          });
-        });
-      });
-    });
+    this.state.warnings=[];this.state.carriers=[];this.state.hangers=[];this.state.carrierJoints=[];
+    const cX=this.getInputValue('cfg_cX',0.5,5,1),tY=this.getInputValue('cfg_tY',0.5,5,1),stock=this.getInputValue('cfg_carrierL',1,12,3);
+    const vertical=!isPanelVert;
+    for(const pos of this.getLinearDistribution(vertical?minX:minY,vertical?maxX:maxY,cX)) {
+      for(const seg of this.rayCast(pos,vertical)) {
+        const len=seg.end-seg.start;if(len<=1e-8)continue;
+        const run={x1:vertical?pos:seg.start,y1:vertical?seg.start:pos,x2:vertical?pos:seg.end,y2:vertical?seg.end:pos,len,pieces:splitRun(len,stock)};
+        let cursor=0;run.joints=run.pieces.slice(0,-1).map(l=>(cursor+=l));
+        const at=t=>({x:run.x1+(run.x2-run.x1)*t/len,y:run.y1+(run.y2-run.y1)*t/len});
+        const positions=[...this.getLinearDistribution(0,len,tY),...run.joints].sort((a,b)=>a-b).filter((x,i,a)=>!i||Math.abs(x-a[i-1])>1e-8);
+        positions.forEach(p=>this.state.hangers.push(at(p)));run.joints.forEach(p=>this.state.carrierJoints.push(at(p)));this.state.carriers.push(run);
+      }
+    }
   }
 
-  /**
-   * [HÀM PHỤ TRỢ] RẢI ĐIỂM THEO TIÊU CHUẨN XÂY DỰNG
-   * =============================================
-   * [CÔNG DỤNG] Tính toán vị trí xương/ty treo theo tiêu chuẩn:
-   *   - Cách tường 300mm (SAFE_DIST = 0.3m)
-   *   - Lặp lại theo bước (step = bước xương hoặc bước ty)
-   *   - Gia cố nếu gap cuối lớn hơn 300mm
-   *
-   * [THỰC TẾ THI CÔNG]
-   * Không thể lắp xương/ty ngay sát tường (chỉ 0mm) vì:
-   *   - Tường thường không vuông góc/phẳng (sai 10-20mm)
-   *   - Cần khoảng cách để lắp fastener/viền
-   *   - Mặc định 300mm là tiêu chuẩn an toàn
-   *
-   * [LOGIC REINFORCEMENT]
-   * Nếu gap cuối > 300mm → Thêm 1 hàng gia cố gần tường
-   * VD: span=5m, step=1m
-   *   - Hàng 1: 0.3m (từ tường)
-   *   - Hàng 2: 1.3m
-   *   - Hàng 3: 2.3m
-   *   - Hàng 4: 3.3m
-   *   - Hàng 5: 4.3m
-   *   - Gap cuối: 0.7m → không cần gia cố
-   * VD khác: span=4m, step=1m
-   *   - Hàng 1: 0.3m
-   *   - Hàng 2: 1.3m
-   *   - Hàng 3: 2.3m
-   *   - Hàng 4: 3.3m
-   *   - Gap cuối: 0.7m → không cần gia cố
-   * VD khác: span=8m, step=2m
-   *   - Hàng 1: 0.3m
-   *   - Hàng 2: 2.3m
-   *   - Hàng 3: 4.3m
-   *   - Hàng 4: 6.3m
-   *   - Gap cuối: 1.7m (> 0.3m) → Thêm hàng 5: 7.7m
-   *
-   * [PARAMETERS]
-   * @param start - Tọa độ bắt đầu (mét)
-   * @param end - Tọa độ kết thúc (mét)
-   * @param step - Bước lặp lại (mét): Bước xương (1.0m) hoặc Bước ty (1.2m)
-   *
-   * @return Mảng các tọa độ {number[]}
-   */
   getLinearDistribution(start, end, step) {
-    const { SAFE_DIST_FROM_WALL } = CONSTRUCTION_STD;
-    let points = [];
-    const span = end - start;
-
-    // [TRƯỜNG HỢP 1] Phòng quá nhỏ (< 600mm)
-    if (span < SAFE_DIST_FROM_WALL * 2) {
-      points.push((start + end) / 2);
-      return points;
-    }
-
-    // [TRƯỜNG HỢP 2] Phòng tiêu chuẩn
-    // 2.1. Điểm đầu tiên: Cách tường Start 300mm
-    let current = start + SAFE_DIST_FROM_WALL;
-
-    // Rải đều
-    while (current <= end - SAFE_DIST_FROM_WALL) {
-      points.push(current);
-      current += step;
-    }
-
-    // 2.3. Xử lý điểm cuối (Reinforcement Logic)
-    const lastPoint = points.length > 0 ? points[points.length - 1] : start;
-    if (end - lastPoint > SAFE_DIST_FROM_WALL + 0.05) {
-      points.push(end - SAFE_DIST_FROM_WALL);
-    }
-
-    return points;
+    if(end-start<0.3-1e-8){this.state.warnings ||= [];this.state.warnings.push('Nhịp nhỏ hơn 300 mm cần cấu tạo riêng');return [];}
+    return distribute(start,end,step);
   }
 
-  // [LƯỚI TÍNH TOÁN] Phương pháp bắn tia (RAY CASTING)
-  // [CÔNG DỤNG] Tìm điểm giao của 1 đường thẳng với đa giác tường
-  // [THỰC TẾ] Dùng để xác định vị trí tấm/xương có nằm trong phòng hay không
-  // [TOÁN HỌC] Sử dụng phương pháp ray-casting trong hình học tính toán
-  //
-  // [THAM SỐ]
-  //   val: Vị trí tia (x=val nếu isVertRay=true, hoặc y=val nếu isVertRay=false)
-  //   isVertRay: true = bắn tia thẳng đứng (theo trục X), false = bắn tia ngang (theo trục Y)
-  //
-  // [QUẢN LÝ LỖI LOGIC]
-  // VD THỰC TẾ: Phòng hình chữ nhật ABCD
-  //   A(0,0) → B(10,0) → C(10,5) → D(0,5) → A
-  //   Bắn tia dọc (x=5) từ trên xuống
-  //   → Giao điểm 1: y=0 (đường AB), Giao điểm 2: y=5 (đường CD)
-  //   → Đoạn có thể lắp tấm: [0, 5] meters
-  //
-  // [THUẬT TOÁN]
-  // 1. Lặp qua từng cạnh của đa giác tường
-  // 2. Kiểm tra xem tia có cắt cạnh này không (cross product)
-  // 3. Tính toán điểm giao cụ thể (tuyến tính interpolation)
-  // 4. Sắp xếp các điểm giao từ nhỏ→lớn
-  // 5. Gom cặp điểm (start, end) thành các đoạn giao
-  //
-  // [CÔNG THỨC INTERPOLATION LINEAR]
-  // Đường thẳng từ A(ax,ay) → B(bx,by)
-  // Nếu cắt tia x=val → y = ay + (val - ax) * (by - ay) / (bx - ax)
   rayCast(val, isVertRay) {
     let hits = []; // Lưu tất cả điểm giao
     const pts = this.state.points; // Đỉnh của đa giác tường
@@ -1584,1113 +1357,122 @@ export default class Engine {
 
   // --- [MỚI] THUẬT TOÁN TỐI ƯU CẮT THANH (BIN PACKING ALGORITHM) ---
   calculateOptimizedBars(segments, barLength, sawBladeWidth = 0.005) {
-    let sortedSegs = [...segments].sort((a, b) => b - a);
-    let bars = [];
-
-    for (let seg of sortedSegs) {
-      let placed = false;
-      for (let i = 0; i < bars.length; i++) {
-        if (bars[i] >= seg + sawBladeWidth) {
-          bars[i] -= seg + sawBladeWidth;
-          placed = true;
-          break;
-        }
-      }
-
-      if (!placed) {
-        if (seg > barLength) {
-          let requiredForThisSeg = Math.ceil(seg / barLength);
-          for (let k = 0; k < requiredForThisSeg; k++) bars.push(0);
-        } else {
-          bars.push(barLength - seg - sawBladeWidth);
-        }
-      }
-    }
-    return bars.length;
+    return packCuts(segments.flatMap(s=>splitRun(s,barLength)),barLength,sawBladeWidth).count;
   }
 
-  // [NEW] LƯU PRESET MỚI TỪ UI
   saveNewPreset() {
-    const name = document.getElementById("newPresetName").value;
-    const pW = parseFloat(document.getElementById("newPresetPW").value);
-    const gW = parseFloat(document.getElementById("newPresetGW").value);
-    const maxL = parseFloat(document.getElementById("newPresetMaxL").value);
-    const color = document.getElementById("newPresetColor").value;
-
-    // Validate
-    if (!name) {
-      this.showFeedback("Vui lòng nhập tên mẫu!", "error");
-      return;
-    }
-    if (isNaN(pW) || isNaN(gW) || isNaN(maxL)) {
-      this.showFeedback("Kích thước không hợp lệ!", "error");
-      return;
-    }
-
-    // Create Preset Object
-    const newPreset = {
-      name: name,
-      pW: pW,
-      gW: gW,
-      maxL: maxL,
-      color: color,
-      type: "user", // Mark as user preset
-    };
-
-    // Add to list
-    this.userPresets.push(newPreset);
-
-    // Save to Storage
-    saveToStorage("USER_PRESETS", this.userPresets); // Helper util
-    this.saveState(); // Save full state as backup
-
-    // Update Dropdown
-    this.updatePresetDropdown();
-
-    // Switch to this preset
-    document.getElementById("presetSelect").value = name;
-    this.applyPreset(name);
-
-    // Close Modal & Feedback
-    document.getElementById("presetModal").classList.add("hidden");
-    this.showFeedback(`Đã tạo mẫu mới: ${name}`, "success");
-
-    // Clear inputs
-    document.getElementById("newPresetName").value = "";
+    const name=document.getElementById('newPresetName').value.trim();
+    const pW=Number(document.getElementById('newPresetPW').value),gW=Number(document.getElementById('newPresetGW').value),maxL=Number(document.getElementById('newPresetMaxL').value);
+    if(!name||!Number.isFinite(pW)||pW<10||pW>1000||!Number.isFinite(gW)||gW<0||!Number.isFinite(maxL)||maxL<0.5||maxL>12)return this.showFeedback('Quy cách sản phẩm không hợp lệ','error');
+    this.userPresets.push({name,pW,gW,maxL,color:document.getElementById('newPresetColor').value});
+    saveToStorage('USER_PRESETS',this.userPresets);this.updatePresetDropdown();
+    document.getElementById('cfg_preset').value=String(this.userPresets.length-1);this.applyPreset();this.renderPresetList();
+    document.getElementById('presetModal').classList.add('hidden');this.showFeedback('Đã lưu mẫu sản phẩm','success');
   }
 
-  // --- TÍNH TOÁN DATA BOQ CHUẨN HÓA (CORE LOGIC) ---
   calculateBOQData(forceMode = null) {
-    // [FIX] Dùng luôn constant đã import ở đầu file, không await import lại
-    const wastePct = this.getInputValue("cfg_waste") / 100;
-    const accessoryWaste = 1 + wastePct;
-
-    const presetName = this.currentPreset
-      ? this.currentPreset.name
-      : "Chưa chọn";
-    const color = this.currentPreset ? this.currentPreset.color : "#E3F2FD";
-
-    // 1. CHẾ ĐỘ TÍNH TOÁN
-    const calcModeEl = document.getElementById("cfg_calcMode");
-    const calcMode = forceMode || (calcModeEl ? calcModeEl.value : "EXACT");
-
-    // Variables for BOQ output
-    let totalCarrierLen = 0,
-      carrierBarsOrder = 0,
-      carrierCouplers = 0;
-    let totalTrimLen = 0,
-      trimBarsOrder = 0;
-    let totalShadowLen = 0,
-      shadowBarsOrder = 0;
-    let totalFasciaLen = 0,
-      fasciaSegmentsOut = [];
-    let totalPoints = 0,
-      rodBarsOrder = 0,
-      totalRodMeters = 0;
-    let panelGroups = {},
-      totalPanelLen = 0,
-      spliceOrder = 0;
-
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const avgHangerLen = this.getInputValue("cfg_hangerL", 0.1, 10.0, 1.0);
-    const BAR_LEN_ROD = 3.0;
-    const maxTransLimit = this.getInputValue("cfg_maxTrans") || 12.0;
-
-    if (calcMode === "NORM") {
-      // ===== [CHẾ ĐỘ NORM] TÍNH THEO ĐỊNH MỨC =====
-      const geomArea = this.getPolygonArea();
-      const geomPerim = this.getPolygonPerimeter();
-
-      const cX = this.getInputValue("cfg_cX", 0.5, 5.0, 1.0, true);
-      const tY = this.getInputValue("cfg_tY", 0.5, 5.0, 1.0, true);
-      const pW = this.getInputValue("cfg_pW", 10, 1000, 100, true) / 1000;
-      const gW = this.getInputValue("cfg_gW", 0, 500, 0, true) / 1000;
-
-      this.totalArea = geomArea; // Set overall area strictly to mathematical geometry area
-
-      // Xương gài
-      totalCarrierLen = geomArea / cX;
-      carrierBarsOrder = Math.ceil(
-        (totalCarrierLen * accessoryWaste) / carrierBarL,
-      );
-      carrierCouplers = Math.ceil(totalCarrierLen / carrierBarL);
-
-      // Viền & Phụ kiện viền
-      totalTrimLen = geomPerim;
-      trimBarsOrder = Math.ceil(
-        (totalTrimLen * accessoryWaste) / CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-      );
-
-      const hasShadow = this.state.edges.some((e) => e.type === "SHADOW");
-      totalShadowLen = hasShadow ? geomPerim : 0;
-      shadowBarsOrder = hasShadow
-        ? Math.ceil(
-            (totalShadowLen * accessoryWaste) /
-              CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-          )
-        : 0;
-
-      const hasFascia = this.state.edges.some((e) => e.type === "FASCIA");
-      totalFasciaLen = hasFascia ? geomPerim : 0;
-      if (hasFascia) fasciaSegmentsOut.push(totalFasciaLen);
-
-      // Hệ treo (Hangers)
-      totalPoints = Math.ceil(geomArea / (cX * tY));
-      totalRodMeters = totalPoints * avgHangerLen;
-      rodBarsOrder = Math.ceil((totalRodMeters * accessoryWaste) / BAR_LEN_ROD);
-
-      // Tấm Trần (Panels)
-      totalPanelLen = geomArea / (pW + gW);
-      panelGroups[totalPanelLen.toFixed(2)] = { qty: 1, status: "OK" };
-
-      const panelMaxL = this.getInputValue("cfg_maxL", 0.5, 12.0, 6.0, true);
-      let spliceCount = Math.ceil(totalPanelLen / panelMaxL) - 1;
-      if (spliceCount < 0) spliceCount = 0;
-      let fasciaSplice = hasFascia
-        ? Math.ceil(totalFasciaLen / maxTransLimit) - 1
-        : 0;
-      if (fasciaSplice < 0) fasciaSplice = 0;
-
-      spliceOrder = Math.ceil((spliceCount + fasciaSplice) * accessoryWaste);
-    } else {
-      // ===== [CHẾ ĐỘ EXACT] TÍNH THEO KÍCH THƯỚC BẢN VẼ THỰC TẾ =====
-
-      // 1. TÍNH TOÁN XƯƠNG GÀI (CARRIER)
-      const carrierSegments = this.state.carriers.map((c) => c.len);
-      totalCarrierLen = carrierSegments.reduce((a, b) => a + b, 0);
-      const carrierBarsReal = this.calculateOptimizedBars(
-        carrierSegments,
-        carrierBarL,
-      );
-      carrierBarsOrder = Math.ceil(carrierBarsReal * accessoryWaste);
-      carrierCouplers = this.state.carriers.reduce(
-        (sum, c) => sum + Math.floor((c.len - 0.01) / carrierBarL),
-        0,
-      );
-
-      // 2. TÍNH TOÁN VIỀN (TRIMS)
-      const trimSegments = this.state.edges
-        .filter((e) => e.type === "WALL_V")
-        .map((e) =>
-          Math.sqrt(
-            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
-          ),
-        );
-      totalTrimLen = trimSegments.reduce((a, b) => a + b, 0);
-      const trimBarsReal = this.calculateOptimizedBars(
-        trimSegments,
-        CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-      );
-      trimBarsOrder = Math.ceil(trimBarsReal * accessoryWaste);
-
-      // [NEW] TÍNH TOÁN SHADOW GAP (Z-PROFILE)
-      const shadowSegments = this.state.edges
-        .filter((e) => e.type === "SHADOW")
-        .map((e) =>
-          Math.sqrt(
-            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
-          ),
-        );
-      totalShadowLen = shadowSegments.reduce((a, b) => a + b, 0);
-      const shadowBarsReal = this.calculateOptimizedBars(
-        shadowSegments,
-        CONSTRUCTION_STD.V_ANGLE_BAR_LENGTH,
-      );
-      shadowBarsOrder = Math.ceil(shadowBarsReal * accessoryWaste);
-
-      // 3. TÍNH TOÁN FASCIA
-      const fasciaSegments = this.state.edges
-        .filter((e) => e.type === "FASCIA")
-        .map((e) =>
-          Math.sqrt(
-            Math.pow(e.p2.x - e.p1.x, 2) + Math.pow(e.p2.y - e.p1.y, 2),
-          ),
-        );
-      totalFasciaLen = fasciaSegments.reduce((a, b) => a + b, 0);
-      fasciaSegmentsOut = fasciaSegments;
-
-      // 4. HỆ TREO
-      totalPoints = this.state.hangers.length;
-      totalRodMeters = totalPoints * avgHangerLen;
-      rodBarsOrder = Math.ceil((totalRodMeters * accessoryWaste) / BAR_LEN_ROD);
-
-      // 5. TẤM TRẦN (PANELS) & SPLICER
-      let spliceCount = 0;
-      this.state.strips.forEach((strip) => {
-        totalPanelLen += strip.totalLen;
-        spliceCount += strip.splices || 0;
-        strip.pieces.forEach((p) => {
-          let key = p.len.toFixed(2);
-          if (!panelGroups[key])
-            panelGroups[key] = { qty: 0, status: p.status };
-          panelGroups[key].qty++;
-        });
-      });
-
-      let fasciaSplice = 0;
-      fasciaSegments.forEach((len) => {
-        if (len > maxTransLimit) {
-          fasciaSplice += Math.ceil(len / maxTransLimit) - 1;
-        }
-      });
-      const totalSplice = spliceCount + fasciaSplice;
-      spliceOrder = Math.ceil(totalSplice * accessoryWaste);
-    }
-
-    return {
-      presetName,
-      color,
-      totalArea: this.totalArea ? this.totalArea.toFixed(2) : "0.00",
-      carriers: {
-        totalLen: totalCarrierLen.toFixed(2),
-        bars: carrierBarsOrder,
-        couplers: Math.ceil(carrierCouplers * accessoryWaste),
-      },
-      trims: {
-        totalLen: totalTrimLen.toFixed(2),
-        bars: trimBarsOrder,
-      },
-      shadowTrims: {
-        totalLen: totalShadowLen.toFixed(2),
-        bars: shadowBarsOrder,
-      },
-      fascia: {
-        totalLen: totalFasciaLen.toFixed(2),
-        segments: fasciaSegmentsOut, // Fixed ReferenceError
-      },
-      hangers: {
-        total: totalPoints,
-        sets: Math.ceil(totalPoints * accessoryWaste),
-        tyRenBars: rodBarsOrder,
-        details: {
-          tyRenMeters: (totalRodMeters * accessoryWaste).toFixed(1),
-          noDan: Math.ceil(totalPoints * accessoryWaste),
-          ecuLongDen: Math.ceil(totalPoints * 2 * accessoryWaste),
-          mocTreoXuong: Math.ceil(totalPoints * accessoryWaste),
-        },
-      },
-      panels: {
-        groups: panelGroups,
-        totalLen: totalPanelLen.toFixed(2),
-      },
-      accessories: {
-        splicer: spliceOrder,
-      },
-      // [NEW] Info for display
-      panelWidth: this.getInputValue("cfg_pW", 100),
-    };
+    const mode=forceMode||document.getElementById('cfg_calcMode')?.value||'EXACT';
+    const waste=1+this.getInputValue('cfg_waste',0,50,3)/100;
+    const stock=this.getInputValue('cfg_carrierL',1,12,3),rodStock=this.getInputValue('cfg_rodStock',0.5,12,3);
+    const ceilingArea=this.getPolygonArea(),pW=this.getInputValue('cfg_pW',10,1000,100)/1000,gW=this.getInputValue('cfg_gW',0,500,0)/1000;
+    const panelGroups={};let panelLen=0,splices=0;
+    for(const s of this.state.strips){panelLen+=s.totalLen;splices+=s.splices||0;for(const p of s.pieces){const key=p.len.toFixed(3);panelGroups[key] ||= {qty:0,status:p.status};panelGroups[key].qty++;}}
+    const norm=mode==='NORM';if(norm){panelLen=ceilingArea/(pW+gW);}
+    const carrierSegments=this.state.carriers.map(c=>c.len),carrierLen=norm?ceilingArea/this.getInputValue('cfg_cX',0.5,5,1):carrierSegments.reduce((a,b)=>a+b,0);
+    const edgeLengths=type=>this.state.edges.filter(e=>e.type===type).map(e=>Math.hypot(e.p2.x-e.p1.x,e.p2.y-e.p1.y));
+    const trim=type=>{const a=edgeLengths(type),n=a.reduce((s,l)=>s+l,0);return {totalLen:n.toFixed(3),bars:Math.ceil(this.calculateOptimizedBars(a,3)*waste)};};
+    const hangers=norm?Math.ceil(ceilingArea/(this.getInputValue('cfg_cX',0.5,5,1)*this.getInputValue('cfg_tY',0.5,5,1))):this.state.hangers.length;
+    const length=this.getRodLength();const rodPlan=length===null||length>rodStock?null:packCuts(Array(hangers).fill(length),rodStock,0.005);
+    const carrierPlan=packCuts(carrierSegments.flatMap(l=>splitRun(l,stock)),stock);
+    const warnings=[...new Set(this.state.warnings||[])];if(length!==null&&length>rodStock)warnings.push('Ty lắp dài hơn cây ty; cần quy cách được duyệt, không tự nối');if(length===null)warnings.push('Thiếu cao độ neo/trần cùng mốc hoặc chiều dài ty lắp hợp lệ');
+    if(this.state.strips.some(s=>s.pieces.some(p=>p.status==='BAD')))warnings.push('Có đoạn dưới chiều dài cắt tối thiểu; cần kiểm tra');
+    if(norm)warnings.push('Định mức chỉ tham khảo; chi tiết thanh và nối lấy từ bố trí thực tế');
+    return {schemaVersion:1,mode,presetName:this.currentPreset?.name||'Tùy chỉnh',color:this.currentPreset?.color||'#E3F2FD',totalArea:ceilingArea.toFixed(3),ceilingArea,panelFaceArea:this.state.strips.reduce((n,s)=>n+s.totalLen*s.width,0),panelWidth:pW*1000,warnings,complete:!warnings.length,
+      carriers:{totalLen:carrierLen.toFixed(3),bars:Math.ceil((norm?Math.ceil(carrierLen/stock):carrierPlan.count)*waste),couplers:Math.ceil(this.state.carriers.reduce((n,c)=>n+splitRun(c.len,stock).length-1,0)*waste),stock,plan:carrierPlan},
+      trims:trim('WALL_V'),shadowTrims:trim('SHADOW'),fascia:{totalLen:edgeLengths('FASCIA').reduce((a,b)=>a+b,0).toFixed(3),segments:edgeLengths('FASCIA')},
+      hangers:{total:hangers,sets:Math.ceil(hangers*waste),tyRenBars:rodPlan?Math.ceil(rodPlan.count*waste):null,installedLength:length,stock:rodStock,plan:rodPlan,details:{tyRenMeters:length===null?null:(hangers*length).toFixed(3),noDan:Math.ceil(hangers*waste),ecuLongDen:Math.ceil(hangers*2*waste),mocTreoXuong:Math.ceil(hangers*waste)}},
+      panels:{groups:panelGroups,totalLen:panelLen.toFixed(3)},accessories:{splicer:Math.ceil(splices*waste)}};
   }
 
-  // --- SHOW BOQ (EDITABLE VERSION) ---
+  getRodLength() {
+    const mode=document.getElementById('cfg_rodMode')?.value||'DIRECT';
+    if(mode==='DIRECT') {const v=Number(document.getElementById('cfg_hangerL')?.value);return Number.isFinite(v)&&v>0?v:null;}
+    const rawA=document.getElementById('cfg_anchorZ')?.value,rawC=document.getElementById('cfg_ceilingZ')?.value;
+    if(!rawA?.trim()||!rawC?.trim())return null;
+    const n=(Number(rawA)-Number(rawC)+Number(document.getElementById('cfg_rodAdjust')?.value||0))/1000;
+    return Number.isFinite(n)&&n>0?n:null;
+  }
+
   showBOQ() {
-    if (this.state.strips.length === 0) return;
-
-    // [FIX] Define carrierBarL for display
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-
-    // [TÍNH KÉP CẢ 2 CHẾ ĐỘ CHO SO SÁNH]
-    const currentMode =
-      document.getElementById("cfg_calcMode")?.value || "EXACT";
-    const metricsExact = this.calculateBOQData("EXACT");
-    const metricsNorm = this.calculateBOQData("NORM");
-
-    // Default metrics to current mode for panels and total displays
-    const metrics = currentMode === "NORM" ? metricsNorm : metricsExact;
-
-    // Helper to create editable comparison row
-    const row = (name, unit, valExact, valNorm, isBold = false) => `
-      <tr>
-          <td style="padding:4px;"><input type="text" class="boq-inp name ${isBold ? "bold" : ""}" value="${name}"></td>
-          <td align="center" style="padding:4px;"><input type="text" class="boq-inp unit" value="${unit}" style="text-align:center; width:60px"></td>
-          <td align="right" style="padding:4px;">
-            <input type="text" class="boq-inp val ${isBold ? "bold" : ""}" value="${valNorm}" style="text-align:right; width:70px; color:#1976D2; background:#F8FAFC" title="Tính theo Định mức (Lý thuyết)" readonly>
-          </td>
-          <td align="right" style="padding:4px;">
-            <input type="text" class="boq-inp val ${isBold ? "bold" : ""}" value="${valExact}" style="text-align:right; width:70px; color:#E65100; background:#FFF8E1" title="Tính theo Kích thước Thực tế (Shopdrawing)" readonly>
-          </td>
-      </tr>
-    `;
-
-    let html = `
-    <div style="font-family: 'Segoe UI', sans-serif;">
-        <div style="background:#E3F2FD; padding:15px; border-radius:4px; margin-bottom:15px; border-left: 5px solid #1976D2;">
-            <div style="font-size: 18px; font-weight: bold; color: #0D47A1;">
-                TỔNG DIỆN TÍCH: ${metrics.totalArea} m²
-            </div>
-            <div style="color: #546E7A; font-size: 13px; margin-top: 5px;">
-                Hệ trần: <b>${metrics.presetName}</b> | Màu: ${metrics.color} | Chế độ Đang chọn: <b>${currentMode === "NORM" ? "Định mức" : "Thực tế"}</b>
-            </div>
-            <div style="font-style:italic; font-size:12px; color:#d32f2f; margin-top:5px">
-              * Bảng này cho phép đối chiếu trực tiếp sự chênh lệch (Hao hụt) giữa 2 phương pháp tính toán.
-            </div>
-        </div>
-
-        <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px; color: #E65100; display:flex; justify-content:space-between;">
-            <span>1. KẾT CẤU KHUNG XƯƠNG</span>
-            <span style="font-size:11px; font-weight:normal; color:#666">* Click nút XUẤT QS để tải Excel</span>
-        </h4>
-        <table id="boq-table-main" style="width:100%; border-collapse: collapse; margin-bottom:20px; font-size:13px">
-            <tr style="background:#ECEFF1;">
-                <th style="text-align:left; padding:8px;">Tên Vật Tư</th>
-                <th style="padding:8px; width:80px; text-align:center">ĐVT</th>
-                <th style="text-align:right; padding:8px; width:90px; color:#0D47A1;">SL ĐỊNH MỨC</th>
-                <th style="text-align:right; padding:8px; width:90px; color:#E65100;">SL THỰC TẾ</th>
-            </tr>
-            ${row(`Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm)`, "m2", metricsExact.totalArea, metricsNorm.totalArea, true)}
-            ${row(`Thanh xương (${carrierBarL}m)`, "Cây", metricsExact.carriers.bars, metricsNorm.carriers.bars, true)}
-            ${row("Thanh V-Góc (3m)", "Cây", metricsExact.trims.bars, metricsNorm.trims.bars, true)}
-            ${
-              metricsExact.shadowTrims && metricsExact.shadowTrims.bars > 0
-                ? row(
-                    "Thanh Shadow Gap (3m)",
-                    "Cây",
-                    metricsExact.shadowTrims.bars,
-                    metricsNorm.shadowTrims.bars,
-                    true,
-                  )
-                : ""
-            }
-             ${
-               metricsExact.fascia && metricsExact.fascia.totalLen > 0
-                 ? row(
-                     "Mặt dựng Fascia",
-                     "md",
-                     metricsExact.fascia.totalLen,
-                     metricsNorm.fascia.totalLen,
-                     true,
-                   )
-                 : ""
-             }
-        </table>
-
-        <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px; color: #2E7D32;">2. PHỤ KIỆN & HỆ TREO</h4>
-        <table id="boq-table-acc" style="width:100%; border-collapse: collapse; margin-bottom:20px; font-size:13px">
-            <tr style="background:#f5f5f5;">
-                <th style="text-align:left; padding:8px;">Tên Phụ Kiện</th>
-                <th style="padding:8px; width:80px; text-align:center">ĐVT</th>
-                <th style="text-align:right; padding:8px; width:90px; color:#0D47A1;">SL ĐỊNH MỨC</th>
-                <th style="text-align:right; padding:8px; width:90px; color:#E65100;">SL THỰC TẾ</th>
-            </tr>
-            ${row("Khóa nối xương", "Cái", metricsExact.carriers.couplers, metricsNorm.carriers.couplers, true)}
-            ${row("Móc treo xương", "Cái", metricsExact.hangers.details.mocTreoXuong, metricsNorm.hangers.details.mocTreoXuong, true)}
-            ${row("Ty ren (3m)", "Cây", metricsExact.hangers.tyRenBars, metricsNorm.hangers.tyRenBars, true)}
-            ${row("Bộ Nở đạn + Ecu", "Bộ", metricsExact.hangers.details.noDan, metricsNorm.hangers.details.noDan, true)}
-            ${metricsExact.accessories.splicer > 0 ? row("Splicer (Nối tấm)", "Cái", metricsExact.accessories.splicer, metricsNorm.accessories.splicer, true) : ""}
-        </table>
-
-         <h4 style="border-bottom: 2px solid #ddd; padding-bottom: 5px;">3. CHI TIẾT CẮT TẤM (SẢN XUẤT)</h4>
-         <div style="max-height:200px; overflow-y:auto; border:1px solid #eee;">
-            <table id="boq-table-panels" style="width:100%; border-collapse:collapse; font-size:12px;">
-                <tr style="background:#ECEFF1; position:sticky; top:0;">
-                    <th style="padding:5px; text-align:left">Chiều dài / Diễn giải</th>
-                    <th style="padding:5px; text-align:right">Số lượng</th>
-                </tr>
-                 ${Object.entries(metrics.panels.groups)
-                   .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]))
-                   .map(
-                     ([len, item]) => `
-                    <tr style="border-bottom:1px solid #eee;">
-                        <td style="padding:2px;"><input class="boq-inp" value="${len} m ${item.status === "BAD" ? "(Vụn)" : ""}" style="width:100%"></td>
-                        <td style="padding:2px; text-align:right;"><input class="boq-inp bold" value="${item.qty}" style="text-align:right; width:60px"></td>
-                    </tr>
-                   `,
-                   )
-                   .join("")}
-            </table>
-         </div>
-         <div style="font-size:11px; color:#999; margin-top:5px">* Số lượng tấm là Net (chưa waste)</div>
-    </div>
-    `;
-
-    document.getElementById("boqContent").innerHTML = html;
-    // [FIX] Use classList to show modal (override CSS !important)
-    document.getElementById("boqModal").classList.remove("hidden");
+    if(!this.state.strips.length)return this.showFeedback('Chưa có vùng trần để tính','error');
+    this.calculate();const m=this.calculateBOQData();
+    const rows=this.boqRows(m,document.getElementById('projectName')?.value||'Phòng hiện tại');
+    document.getElementById('boqContent').innerHTML='<p>Phương pháp: '+escapeHTML(m.mode)+' · Diện tích vùng: '+m.totalArea+' m² · Mặt nhôm: '+m.panelFaceArea.toFixed(3)+' m²</p>'+m.warnings.map(w=>'<p class="text-red">'+escapeHTML(w)+'</p>').join('')+'<table class="qs-table">'+rows.map((r,i)=>'<tr>'+r.map(c=>'<'+(i?'td':'th')+'>'+escapeHTML(c)+'</'+(i?'td':'th')+'>').join('')+'</tr>').join('')+'</table>';
+    document.getElementById('boqModal').classList.remove('hidden');
   }
 
-  // Hiển thị báo cáo tổng hợp cho các project zones đã lưu
-  // Dùng dữ liệu trong zone.stats (theo cấu trúc mới của projectZones)
-  // Hiển thị báo cáo tổng hợp cho các project zones đã lưu - Tách theo LOẠI TẤM
+  boqRows(m,zone) {
+    const rows=[['Khu vực','Vật tư','Loại khối lượng','Chiều dài (mm)','Số lượng','ĐVT','Tổng dài (m)','Chế độ']];
+    const add=(name,kind,len,qty,unit,total='')=>rows.push([zone,name,kind,len,qty,unit,total,m.mode]);
+    for(const [len,item] of Object.entries(m.panels.groups))add('Thanh '+m.presetName,'Đoạn lắp',Math.round(Number(len)*1000),item.qty,'Thanh',(Number(len)*item.qty).toFixed(3));
+    add('Xương','Mét lắp','',m.carriers.totalLen,'m',m.carriers.totalLen);
+    add('Xương','Cây mua',m.carriers.stock*1000,m.carriers.bars,'Cây',(m.carriers.bars*m.carriers.stock).toFixed(3));
+    add('Nối xương','Mua','',m.carriers.couplers,'Cái');
+    add('Ty treo','Điểm lắp',m.hangers.installedLength===null?'Chưa đủ cao độ':Math.round(m.hangers.installedLength*1000),m.hangers.total,'Ty',m.hangers.details.tyRenMeters??'Chưa đủ dữ liệu');
+    add('Ty ren','Cây mua',m.hangers.stock*1000,m.hangers.tyRenBars??'Chưa đủ dữ liệu','Cây',m.hangers.tyRenBars===null?'':(m.hangers.tyRenBars*m.hangers.stock).toFixed(3));
+    add('Nở đạn','Mua','',m.hangers.details.noDan,'Cái');add('Móc treo','Mua','',m.hangers.details.mocTreoXuong,'Cái');add('Ecu/long đen','Mua','',m.hangers.details.ecuLongDen,'Bộ');
+    add('V-góc','Mét lắp','',m.trims.totalLen,'m',m.trims.totalLen);add('V-góc','Cây mua',3000,m.trims.bars,'Cây',(m.trims.bars*3).toFixed(3));
+    add('Shadow','Mét lắp','',m.shadowTrims.totalLen,'m',m.shadowTrims.totalLen);add('Shadow','Cây mua',3000,m.shadowTrims.bars,'Cây',(m.shadowTrims.bars*3).toFixed(3));
+    m.fascia.segments.forEach(l=>add('Mặt dựng','Đoạn lắp',Math.round(l*1000),1,'Thanh',l.toFixed(3)));
+    add('Nối tấm','Mua','',m.accessories.splicer,'Cái');
+    m.warnings.forEach(w=>add('CẢNH BÁO: '+w,'Cần kiểm tra','','',''));
+    return rows;
+  }
+
+  downloadFile(name,text,type='application/json') {
+    const blob=new Blob([text],{type});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
   showProjectBOQ() {
-    const zones = this.state.projectZones || [];
-
-    if (!zones.length) {
-      document.getElementById("boqContent").innerHTML =
-        '<div style="padding:10px">Chưa có khu vực nào trong Project.</div>';
-      document.getElementById("boqModal").classList.remove("hidden");
-      return;
-    }
-
-    // Default global fallback
-    const globalCarrierL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0, true);
-    const waste = 1 + wastePct / 100;
-    const vAngleBarLength = 3.0;
-
-    // Helper: group array counts
-    const groupCounts = (arr) => {
-      const g = {};
-      (arr || []).forEach((len) => {
-        const k = Number(len || 0).toFixed(2);
-        if (!g[k]) g[k] = 0;
-        g[k]++;
-      });
-      return Object.keys(g)
-        .map((k) => ({ len: parseFloat(k), qty: g[k] }))
-        .sort((a, b) => b.len - a.len);
-    };
-
-    // --- DATA AGGREGATION ---
-    // [MAIN CHANGE] Group everything by Panel Type (pKey)
-    const projectTotalArea = { val: 0 };
-    const byType = {}; // { [pKey]: { area, panels[], fascia[], carriers: {len, bars...}, hangers, etc. } }
-
-    zones.forEach((zone) => {
-      const s = zone.stats || {};
-      const zInputs = zone.savedState?.inputs || {};
-      const zPW =
-        parseFloat(zInputs.cfg_pW) ||
-        parseFloat(document.getElementById("cfg_pW")?.value || 100);
-      const zCarrierL = parseFloat(zInputs.cfg_carrierL) || globalCarrierL;
-      const zHangerL = parseFloat(zInputs.cfg_hangerL) || 1.0;
-
-      // Unique Key for Panel Type
-      const pKey = `${zone.savedState?.presetName || "Custom"} (${zPW}mm)`;
-
-      // Init Group if missing
-      if (!byType[pKey]) {
-        byType[pKey] = {
-          // Panels
-          panels: [],
-          fascia: [],
-          area: 0,
-          // Structure
-          carrierLen: 0,
-          carrierBars: 0, // Computed calculated bars
-          wallV: 0,
-          vAngleBars: 0,
-          shadow: 0,
-          // Hangers
-          hangerPoints: 0,
-          rodBars: 0, // Ty ren bars
-          // Accessories
-          couplers: 0,
-          mocTreo: 0,
-          noDan: 0,
-          splicers: 0,
-        };
-      }
-      const grp = byType[pKey];
-
-      // 1. Panels & Fascia
-      const panels = Array.isArray(s.panels) ? s.panels.slice() : [];
-      const fascia = Array.isArray(s.fascia) ? s.fascia.slice() : [];
-      grp.panels.push(...panels.filter((v) => typeof v === "number"));
-      grp.fascia.push(...fascia.filter((v) => typeof v === "number"));
-
-      // 2. Area
-      const zArea = Number(s.totalLinear || 0) * (zPW / 1000);
-      grp.area += zArea;
-      projectTotalArea.val += zArea;
-
-      // 3. Structure (Carriers)
-      grp.carrierLen += Number(s.carrierLen || 0);
-
-      // Carrier Bars Optimization (per zone strategy)
-      let zBars = 0;
-      if (s.carrierSegments && Array.isArray(s.carrierSegments)) {
-        zBars = Math.ceil(
-          this.calculateOptimizedBars(s.carrierSegments, zCarrierL) * waste,
-        );
-      } else {
-        zBars = Math.ceil((Number(s.carrierLen || 0) * waste) / zCarrierL);
-      }
-      grp.carrierBars += zBars;
-
-      // 4. Trims (Window/Wall V)
-      grp.wallV += Number(s.wallV || 0);
-      grp.shadow += Number(s.shadow || 0);
-      // V-Angle Bars
-      grp.vAngleBars += Math.ceil(
-        (Number(s.wallV || 0) * waste) / vAngleBarLength,
-      );
-
-      // 5. Hangers (Ty ren)
-      const zPoints = s.isFacade ? 0 : Number(s.hangers || 0);
-      grp.hangerPoints += zPoints;
-
-      // Rod Bars (Thanh ty ren 3m)
-      const zTotalRodCheck = zPoints * zHangerL;
-      grp.rodBars += Math.ceil((zTotalRodCheck * waste) / 3.0);
-
-      // 6. Accessories
-      const acc = s.accessories || {};
-      const zCouplers =
-        acc.carriers?.couplers ||
-        Math.ceil((Number(s.carrierLen || 0) * waste) / zCarrierL);
-      const zMocTreo =
-        acc.hangers?.details?.mocTreoXuong || Math.ceil(zPoints * waste);
-      const zNoDan = acc.hangers?.details?.noDan || Math.ceil(zPoints * waste);
-      const zSplicers = acc.accessories?.splicer || 0;
-
-      grp.couplers += zCouplers;
-      grp.mocTreo += zMocTreo;
-      grp.noDan += zNoDan;
-      grp.splicers += zSplicers;
-    });
-
-    this.autoSave(); // [AUTO-SAVE] Lưu sau khi tính toán xong
-
-    // --- SECTION 1: PER-ZONE DETAILS ---
-    // Build per-zone HTML blocks (restoring the original per-zone breakdown)
-    const zoneBlocks = zones.map((zone, idx) => {
-      const s = zone.stats || {};
-      const panels = Array.isArray(s.panels) ? s.panels.slice() : [];
-      const fascia = Array.isArray(s.fascia) ? s.fascia.slice() : [];
-      const zInputs = zone.savedState?.inputs || {};
-      const zPW =
-        parseFloat(zInputs.cfg_pW) ||
-        parseFloat(document.getElementById("cfg_pW")?.value || 100);
-      const zCarrierL = parseFloat(zInputs.cfg_carrierL) || globalCarrierL;
-      const zHangerL = parseFloat(zInputs.cfg_hangerL) || 1.0;
-
-      const panelGroups = groupCounts(panels);
-      const fasciaGroups = groupCounts(fascia);
-
-      // Calculate per-zone bars
-      let carrierBars = 0;
-      if (s.carrierSegments && Array.isArray(s.carrierSegments)) {
-        carrierBars = Math.ceil(
-          this.calculateOptimizedBars(s.carrierSegments, zCarrierL) * waste,
-        );
-      } else {
-        carrierBars = Math.ceil(
-          (Number(s.carrierLen || 0) * waste) / zCarrierL,
-        );
-      }
-      const vAngleBars = Math.ceil(
-        (Number(s.wallV || 0) * waste) / vAngleBarLength,
-      );
-      const hangersWithWaste = Math.ceil(
-        (s.isFacade ? 0 : Number(s.hangers || 0)) * waste,
-      );
-
-      return `
-        <div style="border-bottom:1px solid #eee; margin-bottom:8px; padding-bottom:8px">
-          <div style="display:flex; justify-content:space-between; align-items:center">
-            <div><b>${zone.name || "Zone " + (idx + 1)}</b><br><small>${(Number(s.totalLinear) || 0).toFixed(2)} m</small></div>
-            <div style="font-size:12px; color:#666">${new Date(zone.ts).toLocaleString()}</div>
-          </div>
-
-          <div style="margin-top:8px">
-            <div style="font-weight:600; margin-bottom:6px">1) Tấm trần: ${zone.savedState?.presetName || "Custom"} (${zPW}mm) - ${Number(s.totalLinear || 0).toFixed(2)} md</div>
-            <div style="max-height:140px; overflow:auto; border:1px solid #eee; padding:6px; background:#fff">
-              ${panelGroups.length ? `<table style="width:100%; font-size:13px; border-collapse:collapse">${panelGroups.map((p) => `<tr><td>${p.len.toFixed(2)} m</td><td style="text-align:right">${p.qty}</td></tr>`).join("")}</table>` : '<div style="color:#666">Không có tấm</div>'}
-            </div>
-          </div>
-
-          <div style="margin-top:8px">
-            <div style="font-weight:600; margin-bottom:6px">2) Xương & Ty</div>
-            <div style="display:flex; gap:12px; flex-wrap:wrap">
-              <div> Xương: <b>${Number(s.carrierLen || 0).toFixed(2)} md</b> (${carrierBars} cây)</div>
-              <div> Ty treo: <b>${s.isFacade ? 0 : Number(s.hangers || 0)}</b> (có hao hụt: ${hangersWithWaste})</div>
-            </div>
-          </div>
-
-          <div style="margin-top:8px">
-            <div style="font-weight:600; margin-bottom:6px">3) V-Góc & Shadow</div>
-            <div> V-Góc: <b>${Number(s.wallV || 0).toFixed(2)} md</b> (${vAngleBars} cây)</div>
-            <div> Shadow: <b>${Number(s.shadow || 0).toFixed(2)} md</b></div>
-          </div>
-
-          <div style="margin-top:8px">
-            <div style="font-weight:600; margin-bottom:6px">4) Fascia (Mặt dựng)</div>
-            <div style="max-height:120px; overflow:auto; border:1px solid #eee; padding:6px; background:#fff">
-              ${fasciaGroups.length ? `<table style="width:100%; font-size:13px; border-collapse:collapse">${fasciaGroups.map((p) => `<tr><td>${p.len.toFixed(2)} m</td><td style="text-align:right">${p.qty}</td></tr>`).join("")}</table>` : '<div style="color:#666">Không có fascia</div>'}
-            </div>
-          </div>
-        </div>`;
-    });
-
-    // --- RENDER HTML ---
-    let html = `<div style="font-family: 'Segoe UI', sans-serif; padding:10px;">
-      <h3 style="margin:0 0 8px 0">📋 BÁO CÁO DỰ ÁN (Chi tiết từng phòng)</h3>
-      ${zoneBlocks.join("")}
-
-      <hr style="margin:20px 0; border:none; border-top:2px solid #1565C0"/>
-
-      <h3 style="margin:0 0 8px 0; color:#1565C0">🏷️ TỔNG HỢP VẬT TƯ (Theo Loại Tấm)</h3>
-      <div style="margin-bottom:15px; background:#E3F2FD; padding:10px; border-radius:4px">
-         <b>Tổng diện tích dự án:</b> <span style="font-size:18px; color:#D84315">${projectTotalArea.val.toFixed(2)} m²</span>
-         <div style="font-size:11px; color:#555; margin-top:4px">Đã bao gồm hệ số hao hụt an toàn ${wastePct}%</div>
-      </div>
-    `;
-
-    // --- SECTION 2: SUMMARY BY PANEL TYPE ---
-    // Loop through each Panel Type
-    Object.keys(byType).forEach((pKey) => {
-      const grp = byType[pKey];
-      const panelGroups = groupCounts(grp.panels);
-      const fasciaGroups = groupCounts(grp.fascia);
-
-      html += `
-        <div style="border:1px solid #ddd; border-radius:4px; margin-bottom:20px; box-shadow:0 2px 4px rgba(0,0,0,0.05)">
-            <div style="background:#f5f5f5; padding:10px; border-bottom:1px solid #ddd; font-weight:bold; color:#37474F">
-                🏷️ ${pKey} - ${grp.area.toFixed(2)} m²
-            </div>
-
-            <div style="padding:10px">
-                <!-- TABLE 1: MAIN MATERIAL -->
-                <table style="width:100%; border-collapse:collapse; margin-bottom:10px; font-size:13px">
-                    <tr style="background:#ECEFF1"><th style="text-align:left; padding:6px">Vật tư chính & Kết cấu</th><th style="text-align:right; padding:6px">Số lượng</th></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Tấm trần ${pKey}</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.area.toFixed(2)} m²</b></td></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Xương gài (Tổng ${grp.carrierLen.toFixed(2)} md)</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.carrierBars}</b> cây</td></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Thanh V-Góc (Tổng ${grp.wallV.toFixed(2)} md)</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.vAngleBars}</b> cây</td></tr>
-                    ${grp.shadow > 0 ? `<tr><td style="padding:6px; border-bottom:1px solid #eee">Thanh Shadow Gap</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee">${grp.shadow.toFixed(2)} md</td></tr>` : ""}
-                    ${grp.fascia.length > 0 ? `<tr><td style="padding:6px; border-bottom:1px solid #eee">Fascia (Mặt dựng)</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee">${grp.fascia.reduce((a, b) => a + b, 0).toFixed(2)} md</td></tr>` : ""}
-                </table>
-
-                <!-- TABLE 2: ACCESSORIES -->
-                <table style="width:100%; border-collapse:collapse; margin-bottom:10px; font-size:13px">
-                    <tr style="background:#FFF3E0"><th style="text-align:left; padding:6px; color:#E65100">Phụ kiện đi kèm</th><th style="text-align:right; padding:6px; color:#E65100">Số lượng</th></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Ty ren treo trần (3m)</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.rodBars}</b> cây <span style="color:#999;font-size:11px">(${grp.hangerPoints} điểm)</span></td></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Bộ Nở đạn + Ecu</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.noDan}</b> bộ</td></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Móc treo xương</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.mocTreo}</b> cái</td></tr>
-                    <tr><td style="padding:6px; border-bottom:1px solid #eee">Khóa nối xương</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.couplers}</b> cái</td></tr>
-                    ${grp.splicers > 0 ? `<tr><td style="padding:6px; border-bottom:1px solid #eee">Splicer (Nối tấm)</td><td style="padding:6px; text-align:right; border-bottom:1px solid #eee"><b>${grp.splicers}</b> cái</td></tr>` : ""}
-                </table>
-
-                <!-- DETAIL: PANELS -->
-                 <div style="margin-top:8px">
-                    <div style="font-size:12px; font-weight:600; color:#555; margin-bottom:4px">Chi tiết tấm cắt (Sản xuất):</div>
-                    <div style="max-height:100px; overflow:auto; border:1px solid #eee; font-size:12px">
-                        ${panelGroups.length ? `<table style="width:100%; border-collapse:collapse">${panelGroups.map((p) => `<tr><td style="padding:2px 5px">${p.len.toFixed(2)}m</td><td style="text-align:right; padding:2px 5px">${p.qty}</td></tr>`).join("")}</table>` : "<div style='padding:5px'>N/A</div>"}
-                    </div>
-                </div>
-            </div>
-        </div>
-      `;
-    });
-
-    html += `</div>`;
-
-    document.getElementById("boqContent").innerHTML = html;
-    document.getElementById("boqModal").classList.remove("hidden");
+    const rows=this.projectRows();document.getElementById('boqContent').innerHTML='<p>Chi tiết dự án — lượng mua tính riêng từng phòng, không gộp cắt giữa phòng.</p><table class="qs-table">'+rows.map((r,i)=>'<tr>'+r.map(c=>'<'+(i?'td':'th')+'>'+escapeHTML(c)+'</'+(i?'td':'th')+'>').join('')+'</tr>').join('')+'</table>';document.getElementById('boqModal').classList.remove('hidden');
   }
 
-  // [XUẤT CSV] Xuất dữ liệu BOQ ra file Excel - dùng cho shopdrawing
-  // [THỰC TẾ] Kỹ sư dùng file này để:
-  //   1. Gửi lệnh sản xuất cho nhà máy cắt
-  //   2. Lập bảng tính tổng hợp project
-  //   3. Đặt hàng vật tư phụ kiện
+  projectRows() {
+    let rows=[];
+    for(const z of this.state.projectZones){const m=z.stats?.accessories;if(m?.schemaVersion===1){const r=this.boqRows(m,z.name);rows.push(...(rows.length?r.slice(1):r));}else rows.push([z.name,'Kết quả phiên bản cũ: mở và tính lại trước khi xuất']);}
+    return rows.length?rows:[['Chưa có phòng đã lưu']];
+  }
+
   exportCSV() {
-    if (this.state.strips.length === 0) {
-      alert("Vui lòng tính toán trước khi xuất!");
-      return;
-    }
-
-    // Tính toán dữ liệu BOQ
-    const metrics = this.calculateBOQData();
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
-
-    let csv = "\uFEFF"; // BOM for Excel UTF-8
-
-    // [HEADER]
-    const projectName = document.getElementById("projectName")?.value || "BOQ";
-    const now = new Date();
-    const dateStr = now.toISOString().split("T")[0];
-
-    csv += `BÁO CÁO BÓC KHỐI LƯỢNG - TRẦN NHÔM LINEAR\n`;
-    csv += `Tên công trình,${projectName}\n`;
-    csv += `Ngày xuất,${dateStr}\n`;
-    csv += `Hệ số hao hụt,${wastePct}%\n\n`;
-
-    // Luôn tính toán data chuẩn để có metrics base (dùng cho carrier, trims...)
-    // [REMOVED] Redundant recalculation causing SyntaxError
-    // const metrics = this.calculateBOQData();
-
-    // [FIX] Define isModalOpen based on DOM state
-    const isModalOpen = !document
-      .getElementById("boqModal")
-      .classList.contains("hidden");
-
-    if (isModalOpen) {
-      // --- MODE 1: EXPORT WHAT YOU SEE (FROM DOM) ---
-      // Nếu modal mở, ta ưu tiên lấy số liệu user đã sửa trong bảng
-
-      csv += `VẬT TƯ & PHỤ KIỆN (Đã chỉnh sửa)\n`;
-      csv += `Tên Vật Tư,ĐVT,Số Lượng\n`;
-
-      // Helper function to scrape table
-      const scrapeTable = (tableId) => {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-        const rows = table.querySelectorAll("tr");
-        rows.forEach((row, idx) => {
-          if (idx === 0) return; // Skip header
-          const inputs = row.querySelectorAll("input.boq-inp");
-          if (inputs.length >= 3) {
-            const name = inputs[0].value;
-            const unit = inputs[1].value;
-            const val = inputs[2].value;
-            if (name && val) {
-              csv += `${name},${unit},${val}\n`;
-            }
-          }
-        });
-      };
-
-      scrapeTable("boq-table-main");
-      scrapeTable("boq-table-acc");
-      csv += `\n`;
-
-      // 2. Chi tiết tấm
-      csv += `CHI TIẾT CẮT TẤM\n`;
-      csv += `Chiều dài / Diễn giải,Số Lượng\n`;
-      const panelTable = document.getElementById("boq-table-panels");
-      if (panelTable) {
-        const rows = panelTable.querySelectorAll("tr");
-        rows.forEach((row, idx) => {
-          if (idx === 0) return;
-          const inputs = row.querySelectorAll("input.boq-inp");
-          if (inputs.length >= 2) {
-            csv += `${inputs[0].value},${inputs[1].value}\n`;
-          }
-        });
-      }
-    } else {
-      // --- MODE 2: EXPORT FROM CALCULATION (RAW) ---
-      // Logic: Tính toán tự động hoàn toàn
-
-      csv += `BẢNG TỔNG HỢP VẬT TƯ (Tự động tính)\n`;
-      csv += `Tên Vật Tư,ĐVT,Số Lượng,Ghi chú\n`;
-
-      // 1. Tấm trần
-      csv += `Tấm trần ${metrics.presetName} (${metrics.panelWidth}mm),m2,${metrics.totalArea},\n`;
-
-      // 2. Hệ khung xương
-      csv += `Thanh Xương gài (Carrier) ${carrierBarL}m,Cây,${metrics.carriers.bars},Tổng: ${metrics.carriers.totalLen} md\n`;
-      csv += `Thanh V-Góc (3.0m),Cây,${metrics.trims.bars},Tổng: ${metrics.trims.totalLen} md\n`;
-
-      // [NEW] Shadow Gap
-      if (metrics.shadowTrims && metrics.shadowTrims.bars > 0) {
-        csv += `Thanh Shadow Gap (Z-Profile) 3.0m,Cây,${metrics.shadowTrims.bars},Tổng: ${metrics.shadowTrims.totalLen} md\n`;
-      }
-
-      // Fascia
-      if (metrics.fascia && metrics.fascia.totalLen > 0) {
-        csv += `Tấm Fascia/Kính mặt dựng,md,${metrics.fascia.totalLen},Hao hụt cắt: check thực tế\n`;
-      }
-
-      // 3. Phụ kiện
-      csv += `Khóa nối xương (Coupler),Cái,${metrics.carriers.couplers},\n`;
-      csv += `Móc treo xương,Cái,${metrics.hangers.details.mocTreoXuong},\n`;
-      csv += `Ty ren (2m),Cây,${metrics.hangers.tyRenBars},Tổng: ${metrics.hangers.details.tyRenMeters} md\n`;
-      csv += `Bộ Nở đạn + Ecu,Bộ,${metrics.hangers.details.noDan},\n`;
-
-      // Splicer
-      if (metrics.accessories.splicer > 0) {
-        csv += `Phụ kiện nối tấm (Splicer),Cái,${metrics.accessories.splicer},\n`;
-      }
-
-      csv += `\n`;
-
-      // [PART 2] CHI TIẾT CẮT TẤM
-      csv += `LỆNH SẢN XUẤT TẤM\n`;
-      csv += `Chiều dài (mm),SL Net,Ghi chú\n`;
-      Object.keys(metrics.panels.groups)
-        .sort((a, b) => b - a)
-        .forEach((len) => {
-          const item = metrics.panels.groups[len];
-          csv += `${(len * 1000).toFixed(0)},${item.qty},${item.status}\n`;
-        });
-    }
-
-    // [DOWNLOAD]
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.href = url;
-    link.download = `BOQ_${projectName.replace(/\s+/g, "_")}_${dateStr}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-
-    this.showFeedback("Đã xuất file CSV thành công!", "success");
+    if(!this.state.strips.length)return this.showFeedback('Chưa có kết quả','error');
+    this.calculate();const m=this.calculateBOQData();this.downloadFile('QS_'+m.mode+'.csv',csvText(this.boqRows(m,document.getElementById('projectName')?.value||'Phòng hiện tại')),'text/csv;charset=utf-8');
   }
 
-  // [XUẤT PROJECT CSV] Xuất toàn bộ project (tất cả zones)
   exportProjectCSV() {
-    const zones = this.state.projectZones || [];
-
-    if (!zones.length) {
-      alert("Chưa có phòng nào trong Project để xuất!");
-      return;
-    }
-
-    const carrierBarL = this.getInputValue("cfg_carrierL", 1.0, 12.0, 3.0);
-    const wastePct = this.getInputValue("cfg_waste", 0, 50, 0);
-    const waste = 1 + wastePct / 100;
-
-    let csv = "\uFEFF"; // BOM
-
-    // [HEADER]
-    const projectName =
-      document.getElementById("projectName")?.value || "Project";
-    const now = new Date();
-    const dateStr = now.toISOString().split("T")[0];
-
-    csv += `BÁO CÁO TỔNG HỢP DỰ ÁN - TRẦN NHÔM LINEAR\n`;
-    csv += `Tên dự án,${projectName}\n`;
-    csv += `Ngày xuất,${dateStr}\n`;
-    csv += `Số phòng,${zones.length}\n`;
-    csv += `Hệ số hao hụt,${wastePct}%\n\n`;
-
-    // [SECTION 1: DANH SÁCH PHÒNG]
-    csv += `=== DANH SÁCH PHÒNG ===\n`;
-    csv += `STT,Tên phòng,Diện tích (m²),Số tấm,Xương (md),Ty treo,V-Góc (md)\n`;
-
-    let totalArea = 0,
-      totalPanels = 0,
-      totalCarrier = 0,
-      totalHanger = 0,
-      totalWallV = 0;
-
-    zones.forEach((zone, i) => {
-      const s = zone.stats || {};
-      const zInputs = zone.savedState?.inputs || {};
-      const zPW = parseFloat(zInputs.cfg_pW) || 100;
-      const zArea = (Number(s.totalLinear || 0) * zPW) / 1000;
-      const panelCount = Array.isArray(s.panels) ? s.panels.length : 0;
-
-      csv += `${i + 1},${zone.name || "Zone " + (i + 1)},${zArea.toFixed(2)},${panelCount},${Number(s.carrierLen || 0).toFixed(2)},${s.hangers || 0},${Number(s.wallV || 0).toFixed(2)}\n`;
-
-      totalArea += zArea;
-      totalPanels += panelCount;
-      totalCarrier += Number(s.carrierLen || 0);
-      totalHanger += Number(s.hangers || 0);
-      totalWallV += Number(s.wallV || 0);
-    });
-
-    csv += `TỔNG CỘNG,,${totalArea.toFixed(2)},${totalPanels},${totalCarrier.toFixed(2)},${totalHanger},${totalWallV.toFixed(2)}\n\n`;
-
-    // [SECTION 2: TỔNG HỢP VẬT TƯ TOÀN DỰ ÁN]
-    csv += `=== TỔNG HỢP VẬT TƯ TOÀN DỰ ÁN ===\n`;
-    csv += `STT,Tên Vật Tư,ĐVT,Số Lượng (Net),Số Lượng (Có hao hụt),Ghi Chú\n`;
-
-    const carrierBars = Math.ceil((totalCarrier * waste) / carrierBarL);
-    const vAngleBars = Math.ceil((totalWallV * waste) / 3.0);
-    const hangerWithWaste = Math.ceil(totalHanger * waste);
-
-    csv += `1,Tấm trần Linear,m²,${totalArea.toFixed(2)},${(totalArea * waste).toFixed(2)},\n`;
-    csv += `2,Thanh xương gài (${carrierBarL}m),Cây,${Math.ceil(totalCarrier / carrierBarL)},${carrierBars},Tổng ${totalCarrier.toFixed(2)} md\n`;
-    csv += `3,Thanh V-Góc (3m),Cây,${Math.ceil(totalWallV / 3)},${vAngleBars},Tổng ${totalWallV.toFixed(2)} md\n`;
-    csv += `4,Ty ren treo trần (3m),Cây,${Math.ceil(totalHanger)},${hangerWithWaste},\n`;
-    csv += `5,Bộ nở đạn + Ecu,Bộ,${totalHanger},${hangerWithWaste},\n`;
-    csv += `6,Móc treo xương,Cái,${totalHanger},${hangerWithWaste},\n`;
-    csv += `7,Khóa nối xương,Cái,${Math.ceil(totalCarrier / carrierBarL)},${carrierBars},\n`;
-    csv += `\n`;
-
-    // [SECTION 3: CHI TIẾT TỪNG PHÒNG]
-    csv += `=== CHI TIẾT TỪNG PHÒNG ===\n\n`;
-
-    zones.forEach((zone, i) => {
-      const s = zone.stats || {};
-      const panels = Array.isArray(s.panels) ? s.panels : [];
-      const zInputs = zone.savedState?.inputs || {};
-      const zPW = parseFloat(zInputs.cfg_pW) || 100;
-
-      csv += `--- PHÒNG ${i + 1}: ${zone.name || "Zone " + (i + 1)} ---\n`;
-      csv += `Loại tấm,${zone.savedState?.presetName || "Custom"} (${zPW}mm)\n`;
-      csv += `Diện tích,${((Number(s.totalLinear || 0) * zPW) / 1000).toFixed(2)} m²\n\n`;
-
-      // Chi tiết cắt tấm
-      if (panels.length > 0) {
-        csv += `Chi tiết cắt tấm:\n`;
-        csv += `Chiều dài (m),Số lượng\n`;
-
-        // Group panels by length
-        const grouped = {};
-        panels.forEach((len) => {
-          const k = Number(len).toFixed(3);
-          grouped[k] = (grouped[k] || 0) + 1;
-        });
-
-        Object.keys(grouped)
-          .sort((a, b) => parseFloat(b) - parseFloat(a))
-          .forEach((len) => {
-            csv += `${len},${grouped[len]}\n`;
-          });
-      }
-      csv += `\n`;
-    });
-
-    // [DOWNLOAD]
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.href = url;
-    link.download = `PROJECT_${projectName.replace(/\s+/g, "_")}_${dateStr}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-
-    this.showFeedback(`Đã xuất ${zones.length} phòng ra file CSV!`, "success");
+    if(!this.state.projectZones.length)return this.showFeedback('Chưa có phòng đã lưu','error');
+    this.downloadFile('QS_DuAn.csv',csvText(this.projectRows()),'text/csv;charset=utf-8');
   }
 
-  // ============ QUẢN LÝ DỰ ÁN (PROJECT MANAGEMENT) ============
-  // [CÔNG DỤNG] Lưu/tải project zones - cho phép lưu nhiều phòng khác nhau
-  // [THI CÔNG] Dùng để quản lý shopdrawing cho 1 tòa nhà gồm nhiều phòng
-  // [PHẠM VI] Mỗi zone = 1 phòng, có riêng thông số, BOQ, visualization
-  //
-  // [CẤU TRÚC DỮ LIỆU]
-  // state.projectZones = [
-  //   {
-  //     name: "Phòng VP",
-  //     timestamp: 1234567890,
-  //     inputMode: "PRESET",
-  //     inputs: {...},     // Tất cả thông số input
-  //     points: [...],     // Tọa độ đỉnh mặt bằng
-  //     edgeTypes: [...],  // Loại viền của từng cạnh
-  //     stats: {...}       // Thống kê QS: panels, fascia, carriers, hangers, etc
-  //   },
-  //   ...
-  // ]
-
-  // --- LƯU TRẠNG THÁI HIỆN TẠI (SNAPSHOT CURRENT STATE) ---
-  // [CÔNG DỤNG] Capture toàn bộ thông tin của phòng hiện tại
-  // [OUTPUT] Object chứa inputs + geometry + edge types → dùng cho lưu project
-  // [THI CÔNG] Khi click "Lưu" → gọi hàm này để capture snapshot
   captureState() {
-    // [HELPER] Hàm đọc giá trị từ input DOM
-    // Nếu asNumber=true → chuyển về số, ngược lại giữ string
-    const getVal = (id, asNumber = false) => {
-      const el = document.getElementById(id);
-      if (!el) return null;
-      return asNumber ? parseFloat(el.value) : el.value;
-    };
-
-    // [CAPTURE INPUTS] Lưu tất cả thông số từ các input form
-    // [THI CÔNG] Bao gồm: hình dạng, kích thước, thông số trần, thông số kết cấu
-    const inputs = {
-      // Phần 1: Mặt bằng (Floor Plan)
-      shp_type: getVal("shp_type"), // Loại hình: RECT/CUSTOM
-      dim_L: getVal("dim_L", true), // Chiều dài (mm)
-      dim_W: getVal("dim_W", true), // Chiều rộng (mm)
-      dim_Lc: getVal("dim_Lc", true), // Chiều dài custom (mm)
-      dim_Wc: getVal("dim_Wc", true), // Chiều rộng custom (mm)
-
-      // Phần 2: Thông số trần LINEAR
-      cfg_pW: getVal("cfg_pW", true), // Bản rộng tấm (mm)
-      cfg_gW: getVal("cfg_gW", true), // Khe hở tấm (mm)
-      cfg_maxL: getVal("cfg_maxL", true), // Chiều dài nhôm max (m)
-      cfg_maxTrans: getVal("cfg_maxTrans", true), // Giới hạn vận chuyển (m) - [MỚI]
-      cfg_minCut: getVal("cfg_minCut", true), // Cắt tối thiểu (mm)
-
-      // Phần 3: Viền & Kết cấu
-      cfg_dir: getVal("cfg_dir"), // Hướng rải tấm (0=ngang, 90=dọc)
-      cfg_wGap: getVal("cfg_wGap", true), // Khe hở tường (mm)
-      cfg_cX: getVal("cfg_cX", true), // Bước xương (m)
-      cfg_tY: getVal("cfg_tY", true), // Bước ty (m)
-      cfg_hangerL: getVal("cfg_hangerL", true), // [MỚI] Chiều dài ty (m)
-      cfg_carrierL: getVal("cfg_carrierL", true), // [MỚI] Chiều dài xương (m)
-      cfg_waste: getVal("cfg_waste", true), // Hệ số an toàn (%)
-    };
-
-    // [CAPTURE GEOMETRY] Lưu tọa độ đỉnh + loại viền
-    const points = this.state.points.map((p) => ({ x: p.x, y: p.y })); // Copy điểm
-    const edgeTypes = this.state.edges.map((e) => e.type || "WALL_V"); // Copy loại viền
-
-    // [RETURN SNAPSHOT] Trả về object snapshot đầy đủ
-    return {
-      ts: Date.now(), // [TIMESTAMP] Thời gian lưu (ms) - dùng để sắp xếp
-      inputMode: this.state.inputMode, // [MODE] PRESET hay FREE
-      inputs, // [INPUTS] Tất cả thông số
-      points, // [GEOMETRY] Tọa độ đỉnh mặt bằng
-      edgeTypes, // [EDGES] Loại viền (WALL_V, SHADOW, FASCIA, NONE)
-      // [NEW] Save Preset Name explicitly
-      presetName: this.currentPreset ? this.currentPreset.name : "Custom",
-      // [NEW] Save Manual Joints
-      manualJointsMap: { ...this.state.manualJointsMap },
-    };
+    const inputs={};document.querySelectorAll('input[id],select[id]').forEach(el=>{if(/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(el.id))inputs[el.id]=el.value;});
+    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
   }
 
-  // --- KHÔI PHỤC TRẠNG THÁI (RESTORE SNAPSHOT) ---
-  // [CÔNG DỤNG] Load snapshot của phòng trước đó
-  // [INPUT] data: Snapshot object từ captureState()
-  // [THI CÔNG] Khi click vào phòng trong danh sách → gọi hàm này để load
-  // [QUY TRÌNH] Restore inputs → Restore geometry → Recalculate → Redraw
   restoreState(data) {
-    if (!data) return; // [SAFETY] Nếu không có data → không làm gì
-
-    // [BƯỚC 1] RESTORE INPUTS - Điền lại giá trị các input field
-    // [LƯU Ý] Loop qua data.inputs, tìm DOM element tương ứng, set giá trị
-    if (data.inputs) {
-      Object.keys(data.inputs).forEach((k) => {
-        const el = document.getElementById(k); // Tìm input theo ID
-        if (el) el.value = data.inputs[k]; // Set giá trị input
-      });
-    }
-
-    // [NEW] Restore Preset Name
-    if (data.presetName) {
-      this.currentPreset = {
-        name: data.presetName,
-        color: data.inputs?.newPresetColor || "#E3F2FD",
-      };
-    }
-
-    // [NEW] Restore Manual Joints
-    this.state.manualJointsMap = data.manualJointsMap || {};
-
-    // [BƯỚC 2] RESTORE GEOMETRY - Khôi phục mặt bằng
-    // [KHÁC BIỆT] Tuỳ vào mode (PRESET hay FREE) → cách khôi phục khác nhau
-    const mode = data.inputMode || "PRESET";
-
-    if (mode === "PRESET") {
-      // [PRESET MODE] Từ inputs → tính toán lại points (không lưu trực tiếp)
-      // [LÝ DO] PRESET mode dùng công thức hình chữ nhật, nên chỉ cần restore inputs
-      // switchMode sẽ gọi preset() → rebuild points từ inputs
-
-      this.switchMode("PRESET"); // Chuyển sang PRESET mode
-      // Sau khi switchMode → edges sẽ được tạo lại
-      // [RESTORE EDGE TYPES] Nếu data có lưu loại viền → restore
-      if (Array.isArray(data.edgeTypes) && this.state.edges.length) {
-        for (let i = 0; i < this.state.edges.length; i++) {
-          this.state.edges[i].type =
-            data.edgeTypes[i] || this.state.edges[i].type;
-        }
-        this.calculate(); // Tính toán lại với edge types mới
-        this.draw(); // Vẽ lại canvas
-      }
-    } else {
-      // [FREE MODE] Từ points → restore trực tiếp (vì là custom geometry)
-      // [LÝ DO] FREE mode cho phép vẽ hình bất kỳ, phải restore points
-      this.switchMode("FREE"); // Chuyển sang FREE mode
-
-      // [RESTORE POINTS] Nếu có points → set trực tiếp
-      if (Array.isArray(data.points) && data.points.length > 0) {
-        this.state.points = data.points.map((p) => ({ x: p.x, y: p.y })); // Copy points
-        this.syncEdges(); // Tạo edges từ points
-        // [RESTORE EDGE TYPES] Nếu có lưu loại viền → restore
-        if (Array.isArray(data.edgeTypes)) {
-          for (let i = 0; i < this.state.edges.length; i++) {
-            this.state.edges[i].type =
-              data.edgeTypes[i] || this.state.edges[i].type;
-          }
-        }
-        this.calculate(); // Tính toán lại
-        this.draw(); // Vẽ lại canvas
-      }
-    }
-
-    // [BƯỚC 3] UPDATE UI - Cập nhật nút thêm/chỉnh sửa
-    this.updateAddButtonUI(); // Set "Lưu" hay "Cập nhật" tuỳ vào editingIndex
+    if(!data)return;
+    this.state.inputMode=data.inputMode||'FREE';
+    for(const [k,v] of Object.entries(data.inputs||{})){const el=document.getElementById(k);if(el&&/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k))el.value=v;}
+    this.state.jointConfig=structuredClone(data.jointConfig||{pattern:data.inputs?.cfg_joint_pattern||'DEFAULT',patternShift:Number(data.inputs?.cfg_joint_shift||50)/100});
+    this.state.manualJointsMap=structuredClone(data.manualJointsMap||{});
+    this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD'};
+    // Preserve saved geometry, rather than regenerate U/L with missing legacy controls.
+    this.state.points=structuredClone(data.points||[]);this.state.mode='IDLE';this.syncEdges();this.state.edges.forEach((e,i)=>e.type=data.edgeTypes?.[i]||'WALL_V');
+    for(const [id,visible] of [['ui_preset',this.state.inputMode==='PRESET'],['ui_free',this.state.inputMode==='FREE']])document.getElementById(id)?.classList.toggle('hidden',!visible);
+    this.calculate();this.centerView();this.draw();this.updateAddButtonUI();
   }
 
-  // --- THÊM/CẬP NHẬT ZONE VÀO PROJECT (ADD OR UPDATE ZONE) ---
-  // [CÔNG DỤNG] Lưu phòng hiện tại vào danh sách project zones
-  // [THI CÔNG] Khi click "Thêm" → lưu phòng mới, hoặc "Lưu" → cập nhật phòng đang edit
-  // [THAM SỐ] Không có (dùng state.editingIndex để xác định add hay update)
   addToProject() {
+    if(this.state.points.length<3)return this.showFeedback('Chưa có vùng kín để lưu','error');
     // [LẤYTEN] Tên phòng từ input "projectName", hoặc tự động "Zone 1, Zone 2,..."
     const nameEl = document.getElementById("projectName");
     const name =
@@ -2809,6 +1591,7 @@ export default class Engine {
       stats, // [THỐNG KÊ] Tóm tắt chiếu dài, số lượng, v.v
     };
 
+    const wasEditing=this.state.editingIndex!==null;
     // [BƯỚC 6] LƯU VÀO DANH SÁCH
     // [ĐIỀU KIỆN] Nếu editingIndex=null → thêm mới, ngược lại → cập nhật
     if (this.state.editingIndex === null) {
@@ -2829,9 +1612,7 @@ export default class Engine {
 
     // [FIX] Show feedback
     this.showFeedback(
-      this.state.editingIndex === null
-        ? "Đã cập nhật Zone!"
-        : "Đã thêm Zone mới!",
+      wasEditing ? "Đã cập nhật khu vực" : "Đã thêm khu vực",
       "success",
     );
     this.autoSave(); // [AUTO-SAVE] Lưu sau khi thay đổi project
@@ -2902,7 +1683,7 @@ export default class Engine {
     // UI Control: Show/Hide Shift input for Brick mode
     const brickRow = document.getElementById("row_brick_shift");
     if (brickRow) {
-      brickRow.style.display = pattern === "BRICK" ? "flex" : "none";
+      brickRow.classList.toggle("hidden",pattern!=="BRICK");
     }
 
     this.calculate();
@@ -2911,196 +1692,12 @@ export default class Engine {
   // --- JOINT DRAGGING & SNAPPING LOGIC ---
 
   // A. Start Drag (Called from onMouseDown)
-  handleJointDown(e) {
-    if (!this.state.isJointEditing) return false;
 
-    const m = this.getMouse(e);
-    const CLICK_TOLERANCE = 0.3;
 
-    // Check Manual Joints
-    // We need to find if we clicked on an existing manual joint
-    let hit = null;
 
-    this.state.strips.forEach((strip, sIdx) => {
-      if (hit) return;
 
-      const key = strip.pos.toFixed(3);
-      const joints = this.state.manualJointsMap[key] || [];
 
-      // DEBUG LOG
-      // console.log(`Checking Strip ${key}, Joints:`, joints);
 
-      // Check strip bounds first
-      let stripCenter = strip.isVert
-        ? strip.pos + strip.width / 2
-        : strip.pos + strip.width / 2;
-      let mCross = strip.isVert ? m.x : m.y;
-      let mMain = strip.isVert ? m.y : m.x;
-
-      if (Math.abs(mCross - stripCenter) > strip.width / 2 + 0.1) return;
-      if (mMain < strip.start || mMain > strip.end) return;
-
-      let mousePosOnLen = mMain - strip.start;
-      // console.log(`Hit Strip ${key}, Mouse: ${mousePosOnLen}`);
-
-      // Find joint
-      const jIdx = joints.findIndex(
-        (j) => Math.abs(j - mousePosOnLen) < CLICK_TOLERANCE,
-      );
-
-      if (jIdx !== -1) {
-        console.log("JOINT HIT FOUND!", key, jIdx);
-        hit = {
-          stripKey: key,
-          stripStart: strip.start,
-          stripEnd: strip.end,
-          stripIsVert: strip.isVert,
-          jointIdx: jIdx,
-          val: joints[jIdx],
-          initialVal: joints[jIdx],
-          hasMoved: false, // [NEW] Track if actually dragged
-        };
-      }
-    });
-
-    if (hit) {
-      this.state.draggingJoint = hit;
-      // this.showFeedback("Bắt đầu kéo điểm nối...", "info");
-      return true; // Consumed event
-    }
-
-    // If no hit, maybe we want to ADD one and drag it immediately?
-    // For now, simple click adds, drag moves existing.
-    return false;
-  }
-
-  // B. Drag Move (Called from onMove)
-  handleJointDrag(e) {
-    if (!this.state.draggingJoint) return false;
-
-    const m = this.getMouse(e);
-    const d = this.state.draggingJoint;
-
-    // Calculate new raw position relative to strip start
-    let rawVal = (d.stripIsVert ? m.y : m.x) - d.stripStart;
-
-    // Clamp
-    if (rawVal < 0) rawVal = 0;
-    const stripLen = d.stripEnd - d.stripStart;
-    if (rawVal > stripLen) rawVal = stripLen;
-
-    // --- SNAP LOGIC ---
-    // Convert local value back to global coordinate to check against Valid Snap Points (Wall Corners)
-    let globalPos = d.stripStart + rawVal;
-    let isVertStrip = d.stripIsVert; // Strip is vertical -> Joint cut is HORIZONTAL line at Y
-    // Wait, if strip is vertical, joint cuts across it (Horizontal line).
-    // We align this Horizontal cut with Horizontal Wall Edges or Vertices Y.
-
-    const SNAP_DIST = 0.2; // 20cm
-    let snappedVal = null;
-
-    // 1. Snap to Wall Vertices (Corners)
-    // Check against Y if Vertical Strip, X if Horizontal Strip
-    for (let p of this.state.points) {
-      const target = isVertStrip ? p.y : p.x;
-      if (Math.abs(globalPos - target) < SNAP_DIST) {
-        globalPos = target;
-        snappedVal = globalPos; // Found snap
-        break;
-      }
-    }
-
-    // 2. Snap to Wall Edges (Horizontal/Vertical Lines)
-    // U-Shape Base is a Horizontal Line.
-    if (snappedVal === null) {
-      for (let e of this.state.edges) {
-        // If Strip is Vertical -> We cut Horizontal line -> Look for Horizontal Wall Edges
-        // Horizontal Wall Edge: p1.y == p2.y
-
-        if (isVertStrip) {
-          // Checking Horizontal Edges
-          if (Math.abs(e.p1.y - e.p2.y) < 0.01) {
-            // It's horizontal
-            const target = e.p1.y;
-            // Check if globalPos is close to this y
-            if (Math.abs(globalPos - target) < SNAP_DIST) {
-              globalPos = target;
-              snappedVal = globalPos;
-              break;
-            }
-          }
-        } else {
-          // Strip is Horizontal -> Cut Vertical -> Look for Vertical Wall Edges
-          if (Math.abs(e.p1.x - e.p2.x) < 0.01) {
-            // It's vertical
-            const target = e.p1.x;
-            if (Math.abs(globalPos - target) < SNAP_DIST) {
-              globalPos = target;
-              snappedVal = globalPos;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    // Update snapped rawVal
-    // We need to convert globalPos back to local
-    // local = global - start
-    // But start might include offset. Snap works on global coords.
-
-    if (snappedVal !== null) {
-      rawVal = snappedVal - d.stripStart;
-      d.isSnapped = true;
-    } else {
-      d.isSnapped = false;
-    }
-
-    // Check if moved significantly
-    if (Math.abs(rawVal - d.initialVal) > 0.05) {
-      d.hasMoved = true;
-    }
-
-    // Update Joint Value in Map
-    // We update live to see visual feedback?
-    // Updating Map triggers re-calc? Recalc is heavy.
-    // Better: Update UI visual only (Ghost Joint), commit on Up.
-    // But user expects to see the cut moving.
-    // Let's update Map and Recalculate if performance allows (Throttle?)
-    // For < 100 panels, it's fast.
-
-    const joints = this.state.manualJointsMap[d.stripKey];
-    if (joints) {
-      joints[d.jointIdx] = rawVal;
-      this.calculate(); // Re-calc to show splits
-    }
-
-    return true;
-  }
-
-  // C. End Drag (Called from onUp)
-  handleJointUp() {
-    if (this.state.draggingJoint) {
-      const d = this.state.draggingJoint;
-      this.state.draggingJoint = null;
-
-      if (!d.hasMoved) {
-        // Treated as Click -> REMOVE JOINT
-        const joints = this.state.manualJointsMap[d.stripKey];
-        if (joints) {
-          joints.splice(d.jointIdx, 1);
-          this.calculate();
-          this.showFeedback("Đã xóa điểm nối", "warning");
-        }
-      } else {
-        this.showFeedback("Đã chỉnh vị trí điểm nối", "success");
-      }
-      return true;
-    }
-    return false;
-  }
-
-  // 2. Chuyển chế độ EDIT JOINTS
   toggleJointEditMode() {
     // Toggle
     this.state.isJointEditing = !this.state.isJointEditing;
@@ -3142,95 +1739,8 @@ export default class Engine {
   }
 
   // 3. Xử lý Click thêm/xóa khớp nối (được gọi từ onDown)
-  handleJointClick(m) {
-    if (!this.state.isJointEditing) return false;
 
-    let actionTaken = false;
-    const CLICK_TOLERANCE = 0.3; // 30cm tolerance
 
-    // Duyệt qua từng strip để xem có click vào strip nào không
-    this.state.strips.forEach((strip) => {
-      // Check nếu điểm click nằm trong phạm vi strip (theo chiều rộng)
-      // Strip geometry
-      let stripMin, stripMax, stripCenter, mousePosOnLen;
-
-      if (strip.isVert) {
-        // Dọc: Pos là X, Length là Y
-        stripCenter = strip.pos + strip.width / 2;
-        if (Math.abs(m.x - stripCenter) > strip.width / 2 + 0.1) return; // Not this strip (Width check)
-
-        if (m.y < strip.start || m.y > strip.end) return; // Not inside length
-
-        mousePosOnLen = m.y - strip.start; // Rel distance from start
-      } else {
-        // Ngang: Pos là Y, Length là X
-        stripCenter = strip.pos + strip.width / 2;
-        if (Math.abs(m.y - stripCenter) > strip.width / 2 + 0.1) return;
-
-        if (m.x < strip.start || m.x > strip.end) return;
-
-        mousePosOnLen = m.x - strip.start;
-      }
-
-      // A. Check xem có click trúng Joint cũ không -> XÓA
-      // Lấy config gốc của strip này (từ state.jointConfig hoặc strip.savedConfig)
-      // Lưu ý: strip object được recreate mỗi lần calculate(), nên ta cần cơ chế persist manual joints.
-      // Hiện tại ta chưa persist manual joints vào strip object INPUT của calculate.
-      // Ta cần lưu manual joints vào 1 map riêng hoặc trực tiếp vào strip object sau khi calculate xong?
-      // -> KHÔNG, calculate() XÓA và TẠO LẠI strips.
-      // -> GIẢI PHÁP: Cần 1 mảng manualJointsMap lưu ngoài, key là stripIndex.
-
-      // Tuy nhiên, stripIndex có thể thay đổi nếu resize phòng.
-      // Tạm thời: Lưu vào strip object hiện tại, và hy vọng logic calculate() không reset ???
-      // Wait, calculate() dòng 930: `this.state.strips = []`. NÓ SẼ RESET.
-      // -> Cần Persist Manual Joints trước khi Calculate reset chúng.
-      // -> Hoặc: Update `calculate` để giữ lại Manual Joints nếu topology không đổi?
-      // -> Challenge: Topology thay đổi liên tục khi resize.
-
-      // SIMPLIFICATION for V1:
-      // Chỉ support Manual Joint khi KHÔNG resize phòng/thay đổi kích thước.
-      // Ta sẽ lưu Manual Joints vào 1 mảng riêng `this.state.manualJointsMap = { stripPos: [joints...] }`
-      // Key là `strip.pos` (khá ổn định nếu không đổi origin/module).
-
-      if (!this.state.manualJointsMap) this.state.manualJointsMap = {};
-      const key = strip.pos.toFixed(3);
-      let currentJoints = this.state.manualJointsMap[key] || [];
-
-      // Check hit existing joint
-      const hitIdx = currentJoints.findIndex(
-        (j) => Math.abs(j - mousePosOnLen) < CLICK_TOLERANCE,
-      );
-
-      if (hitIdx !== -1) {
-        // HIT -> REMOVE
-        currentJoints.splice(hitIdx, 1);
-        this.showFeedback(
-          `Đã xóa điểm nối tại ${mousePosOnLen.toFixed(2)}m`,
-          "warning",
-        );
-        actionTaken = true;
-      } else {
-        // NO HIT -> ADD
-        // Add new joint
-        currentJoints.push(mousePosOnLen);
-        this.showFeedback(
-          `Đã thêm điểm nối tại ${mousePosOnLen.toFixed(2)}m`,
-          "success",
-        );
-        actionTaken = true;
-      }
-
-      // Save back
-      this.state.manualJointsMap[key] = currentJoints;
-    });
-
-    if (actionTaken) {
-      this.calculate(); // Recalculate with new joints
-      return true;
-    }
-    return false;
-  }
-  // [VẼ DANH SÁCH PROJECT] - Updated for Lucide Icons
   renderProjectList() {
     const container = document.getElementById("projectList");
     if (!container) return;
@@ -3251,7 +1761,7 @@ export default class Engine {
       return `
         <div class="proj-item" style="display:flex; justify-content:space-between; align-items:center; padding:8px; border-bottom:1px solid #eee">
           <div style="flex:1">
-            <div style="font-weight:600; font-size:13px">${z.name || "Zone " + (i + 1)}</div>
+            <div style="font-weight:600; font-size:13px">${escapeHTML(z.name || "Zone " + (i + 1))}</div>
             <div style="font-size:11px; color:#666; margin-top:2px;">
                 <span style="display:inline-flex; align-items:center; gap:4px">
                     <i data-lucide="maximize" class="icon-xs"></i> ${z.stats.totalLinear.toFixed(2)}m
@@ -3343,7 +1853,7 @@ export default class Engine {
 
     // 2. Build Full State Object
     const fullState = {
-      version: "17.0",
+      version: "18.0",
       ts: Date.now(),
       projectZones: this.state.projectZones,
       currentWork: currentSnapshot, // Trạng thái đang làm dở
@@ -3359,7 +1869,8 @@ export default class Engine {
 
   // [LOAD STATE] Khôi phục trạng thái khi mở app
   loadState() {
-    const data = loadFromStorage(this.STORAGE_KEY);
+    let data = loadFromStorage(this.STORAGE_KEY);
+    if(data){try{validateProject(data);}catch(e){this.showFeedback("Dữ liệu cũ cần kiểm tra: "+e.message,"error");return;}}
     if (!data) return; // Không có dữ liệu cũ
 
     console.log("📂 Loading saved state...", data);
@@ -3392,7 +1903,7 @@ export default class Engine {
   exportProject() {
     // Build export data
     const exportData = {
-      version: "17.0",
+      version: "18.0",
       exportedAt: new Date().toISOString(),
       projectZones: this.state.projectZones,
       currentWork: this.captureState(),
@@ -3439,6 +1950,8 @@ export default class Engine {
     this.state.carriers = [];
     this.state.hangers = [];
     this.state.editingIndex = null;
+    this.state.manualJointsMap = {};
+    this.state.jointConfig = {pattern:"DEFAULT",patternShift:0.5};
 
     // Reset inputs to defaults
     document.getElementById("projectName").value = "";
@@ -3463,7 +1976,7 @@ export default class Engine {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const data = JSON.parse(e.target.result);
+        const data = validateProject(JSON.parse(e.target.result));
 
         // Validate structure
         if (!data.version || !Array.isArray(data.projectZones)) {
@@ -3585,6 +2098,7 @@ export default class Engine {
     this.state.CMD.history.push(inputStr);
 
     const parsed = CAD_UTILS.parseInput(inputStr);
+    if(!parsed)return this.showFeedback("Cú pháp tọa độ không hợp lệ","error");
     const lastPt =
       this.state.points.length > 0
         ? this.state.points[this.state.points.length - 1]
@@ -3773,13 +2287,13 @@ export default class Engine {
         // Hit Y: m.y >= s.start && m.y <= s.end
         const centerX = s.pos + hitW;
         if (Math.abs(m.x - centerX) < hitW && m.y >= s.start && m.y <= s.end) {
-          return { strip: s, key: s.pos.toFixed(3), isVert: true, centerX };
+          return { strip: s, key: s.key || s.pos.toFixed(3), isVert: true, centerX };
         }
       } else {
         // Strip Horizontal
         const centerY = s.pos + hitW;
         if (Math.abs(m.y - centerY) < hitW && m.x >= s.start && m.x <= s.end) {
-          return { strip: s, key: s.pos.toFixed(3), isVert: false, centerY };
+          return { strip: s, key: s.key || s.pos.toFixed(3), isVert: false, centerY };
         }
       }
     }
@@ -3987,4 +2501,44 @@ export default class Engine {
     this.showFeedback("Đã thêm mối nối", "success");
     return true;
   }
+  exportProfile() {
+    this.downloadFile('QS_ThietLap.json',JSON.stringify({kind:'QS_PROFILE',version:1,inputs:this.captureState().inputs,presets:this.userPresets},null,2));
+  }
+
+  loadProfile(event) {
+    const file=event.target.files?.[0];if(!file)return;
+    if(file.size>2000000){this.showFeedback('File mẫu quá lớn','error');return;}
+    const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(reader.result);if(p.kind!=='QS_PROFILE'||p.version!==1)throw Error('Sai định dạng mẫu');
+      validateProject({version:'18.0',projectZones:[],presets:p.presets,currentWork:{points:[],inputs:p.inputs}});
+      const snapshot=this.captureState();snapshot.inputs={...snapshot.inputs,...p.inputs};snapshot.jointConfig={pattern:p.inputs.cfg_joint_pattern||'DEFAULT',patternShift:Number(p.inputs.cfg_joint_shift||50)/100};this.userPresets=p.presets;this.updatePresetDropdown();this.restoreState(snapshot);saveToStorage('USER_PRESETS',this.userPresets);this.saveState();this.showFeedback('Đã tải thiết lập','success');
+    }catch(e){this.showFeedback(e.message,'error');}finally{event.target.value='';}};reader.readAsText(file);
+  }
+
+  cutRows(metrics,zone) {
+    const rows=[['Khu vực','Vật tư','Cây số','Stock (mm)','Các đoạn (mm)','Kerf (mm)','Dư (mm)']];
+    for(const [name,plan] of [['Xương',metrics.carriers.plan],['Ty ren',metrics.hangers.plan]])if(plan)plan.bars.forEach((b,i)=>rows.push([zone,name,i+1,plan.stock*1000,b.cuts.map(l=>Math.round(l*1000)).join(' + '),Math.round(b.kerf*1000),Math.round(b.remaining*1000)]));
+    return rows;
+  }
+
+  exportWorkbook(project=false) {
+    let rows=[],cuts=[];
+    const add=(m,name)=>{const r=this.boqRows(m,name),c=this.cutRows(m,name);rows.push(...(rows.length?r.slice(1):r));cuts.push(...(cuts.length?c.slice(1):c));};
+    if(project){for(const z of this.state.projectZones){if(z.stats?.accessories?.schemaVersion!==1)return this.showFeedback('Có phòng phiên bản cũ: mở và tính lại trước','error');add(z.stats.accessories,z.name);}}
+    else {this.calculate();add(this.calculateBOQData(),document.getElementById('projectName')?.value||'Phòng hiện tại');}
+    if(!rows.length)return this.showFeedback('Chưa có kết quả','error');
+    const summary=this.purchaseSummary(rows);
+    this.downloadFile(project?'QS_DuAn.xlsx':'QS_Phong.xlsx',xlsxBytes([{name:'Chi tiet vung',rows},{name:'Tong hop mua',rows:summary},{name:'Cat cay net',rows:cuts},{name:'Ghi chu',rows:[['Nội dung'],['Cắt cây net chưa gồm cây dự phòng. Bảng mua đã áp hao hụt dự phòng.'],['Phạm vi tái dùng dư: trong từng phòng; chưa gộp cắt giữa phòng.'],['Phiên bản 18 — dữ liệu preset cần đối chiếu catalogue trước đặt hàng.']]}]),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  }
+
+  purchaseSummary(rows) {
+    const grouped=new Map();
+    for(const r of rows.slice(1))if(['Cây mua','Mua'].includes(r[2])){const key=JSON.stringify([r[1],r[3],r[5],r[7]]);if(!Number.isFinite(Number(r[4])))continue;const g=grouped.get(key)||[r[1],r[3],0,r[5],0,r[7]];g[2]+=Number(r[4]);g[4]+=Number(r[6])||0;grouped.set(key,g);}
+    return [['Vật tư','Stock (mm)','SL mua','ĐVT','Tổng dài stock (m)','Chế độ'],...grouped.values()];
+  }
+
+  exportDXF() {
+    this.calculate();if(!this.state.strips.length)return this.showFeedback('Chưa có vùng','error');this.downloadFile('QS_BoTri.dxf',layoutDXF(this.state),'application/dxf');
+  }
+
 }
+

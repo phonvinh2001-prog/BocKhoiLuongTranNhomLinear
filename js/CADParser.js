@@ -8,6 +8,9 @@ export const CAD_UTILS = {
     if (!str) return null;
     str = str.trim().toUpperCase();
 
+    if(str.startsWith('@')&&!/^@-?\d+(?:\.\d+)?(?:,-?\d+(?:\.\d+)?|<-?\d+(?:\.\d+)?)$/.test(str))return null;
+    if(str.includes(',')&&!/^@?-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/.test(str))return null;
+    if(str.includes('<')&&!/^@?-?\d+(?:\.\d+)?<-?\d+(?:\.\d+)?$/.test(str))return null;
     // 1. Direct Distance (Number)
     // Regex: Optional negative sign, digits, optional decimal part
     if (/^-?\d+(\.\d+)?$/.test(str)) {
@@ -74,3 +77,4 @@ export const CAD_UTILS = {
     };
   },
 };
+

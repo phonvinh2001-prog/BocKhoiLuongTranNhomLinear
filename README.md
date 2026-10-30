@@ -1,5 +1,11 @@
 # ALU-MASTER STUDIO
 
+## Bản nâng cấp v18 — ứng viên kiểm tra
+
+Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Kiểm thử: `node --test tests/regression.test.mjs`. Node >=20, không cần cài dependency.
+
+Đã sửa kết quả CSV/lưu–mở, quy tắc xương/ty 150 mm và ngưỡng bù >300 mm; thêm cao độ ty, bảng cắt cây, Excel và DXF xuất. Xem [phạm vi và giới hạn v18](docs/RELEASE-v18.md). Nhập DXF/PDF, lỗ mở, hướng tùy ý và backend mới vẫn nằm trong lộ trình, chưa có trong bản này.
+
 **Công cụ bóc khối lượng trần nhôm chuyên nghiệp.**
 
 Ứng dụng web giúp kỹ sư bóc tách khối lượng, lập bảng kê vật tư (BOQ) và sơ đồ cắt tấm cho các hệ trần nhôm linear một cách nhanh chóng và chính xác.
@@ -41,3 +47,4 @@
 ---
 
 _Phát triển bởi ALU-MASTER Team._
+
