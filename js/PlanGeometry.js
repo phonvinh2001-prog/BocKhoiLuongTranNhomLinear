@@ -28,11 +28,32 @@ export function regionIntervals(points,openings,val,vertical,purpose='PANEL'){
   let out=ringIntervals(points,val,vertical);for(const h of openings||[]){if(purpose==='STRUCTURE'&&h.scope==='PANEL')continue;for(const cut of openingIntervals(h,val,vertical)){out=out.flatMap(s=>{if(cut.end<=s.start+EPS||cut.start>=s.end-EPS)return [s];const pieces=[];if(cut.start>s.start+EPS)pieces.push({start:s.start,end:cut.start});if(cut.end<s.end-EPS)pieces.push({start:cut.end,end:s.end});return pieces;});}}return out;
 }
 export const pointInRegion=(p,points,holes=[])=>pointLocation(p,points)>=0&&!holes.some(h=>openingLocation(p,h)>=0);
-// Interior probes detect overlapping net regions, including coincident and collinear outlines.
-// Shared edges are allowed. This is a review warning, never a boolean union of different products.
+// Between vertex/extremum/intersection X events, the vertical ordering of every
+// boundary is unchanged. Test the interior of each slab, including exact circle arcs.
+function boundaries(region){return [...segmentsOf(region.points).map(s=>({...s,type:'line'})),...(region.openings||[]).flatMap(h=>h.type==='circle'?[h]:segmentsOf(h.points).map(s=>({...s,type:'line'})))];}
+function bounds(p){return p.type==='circle'?[p.center.x-p.radius,p.center.x+p.radius,p.center.y-p.radius,p.center.y+p.radius]:[Math.min(p.a.x,p.b.x),Math.max(p.a.x,p.b.x),Math.min(p.a.y,p.b.y),Math.max(p.a.y,p.b.y)];}
+function crossingPoints(a,b){
+  const x=bounds(a),y=bounds(b);if(x[0]>y[1]+EPS||y[0]>x[1]+EPS||x[2]>y[3]+EPS||y[2]>x[3]+EPS)return [];
+  if(a.type!=='circle'&&b.type!=='circle'){const p=intersection(a.a,a.b,b.a,b.b);return p?[p]:[];}
+  if(a.type==='circle'&&b.type==='circle'){
+    const d=distance(a.center,b.center);if(d<EPS||d>a.radius+b.radius+EPS||d<Math.abs(a.radius-b.radius)-EPS)return [];
+    const along=(a.radius*a.radius-b.radius*b.radius+d*d)/(2*d),h2=a.radius*a.radius-along*along;if(h2<-EPS)return [];
+    const dx=(b.center.x-a.center.x)/d,dy=(b.center.y-a.center.y)/d,h=Math.sqrt(Math.max(0,h2)),p={x:a.center.x+along*dx,y:a.center.y+along*dy};
+    return [{x:p.x-dy*h,y:p.y+dx*h},{x:p.x+dy*h,y:p.y-dx*h}];
+  }
+  const c=a.type==='circle'?a:b,l=a.type==='circle'?b:a,dx=l.b.x-l.a.x,dy=l.b.y-l.a.y,ox=l.a.x-c.center.x,oy=l.a.y-c.center.y;
+  const A=dx*dx+dy*dy;if(A<EPS*EPS)return [];const B=2*(dx*ox+dy*oy),C=ox*ox+oy*oy-c.radius*c.radius,D=B*B-4*A*C;if(D<0)return [];
+  return [(-B-Math.sqrt(D))/(2*A),(-B+Math.sqrt(D))/(2*A)].filter(t=>t>=-EPS&&t<=1+EPS).map(t=>({x:l.a.x+t*dx,y:l.a.y+t*dy}));
+}
 export function regionsOverlap(a,b){
-  const pts=[...a.points,...b.points];const xs=pts.map(p=>p.x);if(Math.min(...xs.slice(0,a.points.length))>Math.max(...xs.slice(a.points.length))+EPS||Math.min(...xs.slice(a.points.length))>Math.max(...xs.slice(0,a.points.length))+EPS)return false;
-  const probes=[];for(const region of [a,b])for(const {a:p,b:q} of segmentsOf(region.points)){const len=distance(p,q);for(const t of [.01,.5,.99]){const c={x:p.x+(q.x-p.x)*t,y:p.y+(q.y-p.y)*t};for(const sign of [-1,1])probes.push({x:c.x+sign*(q.y-p.y)/len*1e-6,y:c.y-sign*(q.x-p.x)/len*1e-6});}}
-  for(const s of segmentsOf(a.points))for(const t of segmentsOf(b.points)){const p=intersection(s.a,s.b,t.a,t.b);if(p)for(const dx of [-1,1])for(const dy of [-1,1])probes.push({x:p.x+dx*1e-6,y:p.y+dy*1e-6});}
-  return probes.some(p=>pointLocation(p,a.points)===1&&pointLocation(p,b.points)===1&&pointInRegion(p,a.points,a.openings)&&pointInRegion(p,b.points,b.openings));
+  if(a.points.length<3||b.points.length<3)return false;
+  const ax=a.points.map(p=>p.x),bx=b.points.map(p=>p.x),ay=a.points.map(p=>p.y),by=b.points.map(p=>p.y);
+  const left=Math.max(Math.min(...ax),Math.min(...bx)),right=Math.min(Math.max(...ax),Math.max(...bx));
+  if(right-left<=EPS||Math.min(Math.max(...ay),Math.max(...by))-Math.max(Math.min(...ay),Math.min(...by))<=EPS)return false;
+  const ap=boundaries(a),bp=boundaries(b),xs=[left,right];for(const p of [...ap,...bp]){const box=bounds(p);xs.push(box[0],box[1]);}
+  for(const p of ap)for(const q of bp)for(const at of crossingPoints(p,q))xs.push(at.x);
+  const events=xs.filter(x=>x>=left-EPS&&x<=right+EPS).sort((x,y)=>x-y).filter((x,i,all)=>!i||x-all[i-1]>EPS);
+  for(let k=1;k<events.length;k++){if(events[k]-events[k-1]<=EPS)continue;const x=(events[k]+events[k-1])/2,A=regionIntervals(a.points,a.openings||[],x,true),B=regionIntervals(b.points,b.openings||[],x,true);let i=0,j=0;
+    while(i<A.length&&j<B.length){if(Math.min(A[i].end,B[j].end)-Math.max(A[i].start,B[j].start)>EPS)return true;if(A[i].end<B[j].end)i++;else j++;}
+  }return false;
 }

@@ -1414,6 +1414,7 @@ export default class Engine {
 
   restoreState(data) {
     if(!data)return;
+    this.didRestoreWork=true;
     this.state.cadData=data.cad||null;
     this.state.inputMode=data.inputMode||'FREE';
     for(const [k,v] of Object.entries(data.inputs||{})){const el=document.getElementById(k);if(el&&/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k))el.value=v;}
@@ -1595,7 +1596,7 @@ export default class Engine {
 
     // [BƯỚC 3] RESTORE TRẠNG THÁI TÍNH TOÁN
     // [QUY TRÌNH] Gọi restoreState → sẽ restore inputs + geometry
-    this.restoreState(zone.savedState);
+    this.restoreState({...zone.savedState,zoneId:zone.id,zoneName:zone.name});
 
     // [BƯỚC 4] UPDATE UI
     this.updateAddButtonUI(); // Nút sẽ thay đổi từ "Thêm" thành "Lưu"
