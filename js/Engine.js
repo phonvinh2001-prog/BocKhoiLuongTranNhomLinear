@@ -37,6 +37,7 @@ import { JointSolver } from "./JointSolver.js";
 
 import { distribute, splitRun, packCuts, structureForRuns, csvText, escapeHTML } from './QuantityRules.js';
 import { xlsxBytes, layoutDXF } from './ExportFormats.js';
+import {netArea,ringArea,openingsError,regionIntervals} from './PlanGeometry.js';
 import { validateProject } from './ProjectData.js';
 export default class Engine {
   constructor() {
@@ -51,6 +52,8 @@ export default class Engine {
     this.state = {
       mode: "IDLE", // IDLE, DRAW, EDIT
       points: [], // Array of {x, y}
+      openings: [],
+      activeZoneId: null,
       strips: [], // Array of strips
       gridSize: 0.5, // Grid snap size (meters)
       scale: 50, // Pixels per meter
@@ -665,25 +668,13 @@ export default class Engine {
   }
 
   syncEdges() {
-    this.state.edges = this.state.points.map((p, i) => ({
-      p1: p,
-      p2: this.state.points[(i + 1) % this.state.points.length],
-      type: "NONE",
-    }));
+    const key=e=>[e.openingId||'',e.p1.x,e.p1.y,e.p2.x,e.p2.y].join(':');
+    const previous=new Map((this.state.edges||[]).map(e=>[key(e),e.type]));
+    const rings=[{points:this.state.points,id:null},...(this.state.openings||[]).filter(h=>h.type==='polygon')];
+    this.state.edges=rings.flatMap(r=>r.points.map((p,i)=>{const e={p1:p,p2:r.points[(i+1)%r.points.length],type:'NONE',openingId:r.id};e.type=previous.get(key(e))||'NONE';return e;}));
   }
 
-  // [HÀM PHỤ] Tính diện tích hình học thực tế (m2)
-  getPolygonArea() {
-    let area = 0;
-    const pts = this.state.points;
-    if (!pts || pts.length < 3) return 0;
-    for (let i = 0; i < pts.length; i++) {
-      let j = (i + 1) % pts.length;
-      area += pts[i].x * pts[j].y;
-      area -= pts[j].x * pts[i].y;
-    }
-    return Math.abs(area / 2);
-  }
+  getPolygonArea() {return netArea(this.state.points,this.state.openings||[]);}
 
   // [HÀM PHỤ] Tính chu vi hình học thực tế (m dài)
   getPolygonPerimeter() {
@@ -880,6 +871,7 @@ export default class Engine {
   // [LUỒNG]: Rải tấm → Cắt tấm → Tính xương → Tính ty → Vẽ
   calculate() {
     if (this.state.mode==='DRAW' || this.state.points.length < 3) {this.state.strips=[];this.state.carriers=[];this.state.hangers=[];return;}
+    const holeError=openingsError(this.state.points,this.state.openings||[]);if(holeError){this.state.strips=[];this.state.carriers=[];this.state.hangers=[];this.state.carrierJoints=[];this.state.warnings=[holeError];return this.showFeedback(holeError,'error');}
 
     // [HÌNH U – THI CÔNG] Phát hiện hình U & lưu vào state
     this.state.shapeType = this.detectShapeType();
@@ -1042,7 +1034,7 @@ export default class Engine {
     const cX=this.getInputValue('cfg_cX',0.5,5,1),tY=this.getInputValue('cfg_tY',0.5,5,1),stock=this.getInputValue('cfg_carrierL',1,12,3);
     const vertical=!isPanelVert;
     for(const pos of this.getLinearDistribution(vertical?minX:minY,vertical?maxX:maxY,cX)) {
-      for(const seg of this.rayCast(pos,vertical)) {
+      for(const seg of this.rayCast(pos,vertical,'STRUCTURE')) {
         const len=seg.end-seg.start;if(len<=1e-8)continue;
         const run={x1:vertical?pos:seg.start,y1:vertical?seg.start:pos,x2:vertical?pos:seg.end,y2:vertical?seg.end:pos,len,pieces:splitRun(len,stock)};
         let cursor=0;run.joints=run.pieces.slice(0,-1).map(l=>(cursor+=l));
@@ -1058,48 +1050,8 @@ export default class Engine {
     return distribute(start,end,step);
   }
 
-  rayCast(val, isVertRay) {
-    let hits = []; // Lưu tất cả điểm giao
-    const pts = this.state.points; // Đỉnh của đa giác tường
-
-    // [VÒNG LẶP] Kiểm tra từng cạnh của tường
-    for (let i = 0; i < pts.length; i++) {
-      let a = pts[i], // Điểm đầu cạnh
-        b = pts[(i + 1) % pts.length]; // Điểm cuối cạnh (quay lại A nếu i=n-1)
-
-      if (isVertRay) {
-        // [BẮNTI THẲNG ĐỨC] Kiểm tra xem cạnh AB có cắt đường thẳng x=val không
-        // Điều kiện cắt: A và B phải ở 2 bên của tia (hoặc nằm trên tia)
-        if ((a.x <= val && b.x > val) || (b.x <= val && a.x > val)) {
-          // [TÍNH GIAO ĐIỂM] Dùng công thức interpolation tuyến tính
-          // y = a.y + (val - a.x) * (b.y - a.y) / (b.x - a.x)
-          hits.push(a.y + ((val - a.x) * (b.y - a.y)) / (b.x - a.x));
-        }
-      } else {
-        // [BẮNTIA NGANG] Kiểm tra xem cạnh AB có cắt đường thẳng y=val không
-        if ((a.y <= val && b.y > val) || (b.y <= val && a.y > val)) {
-          // [TÍNH GIAO ĐIỂM] x = a.x + (val - a.y) * (b.x - a.x) / (b.y - a.y)
-          hits.push(a.x + ((val - a.y) * (b.x - a.x)) / (b.y - a.y));
-        }
-      }
-    }
-
-    // [SẮPXẾP] Sắp xếp các điểm giao từ nhỏ→lớn
-    // [LÝDO] Đảm bảo gom cặp điểm (start, end) đúng thứ tự
-    hits.sort((a, b) => a - b);
-
-    // [GOMMÔI] Gom các điểm thành cặp đoạn (start-end)
-    // [THI CÔNG] Kết quả là 1 list của các đoạn trong phòng có thể lắp tấm/xương
-    // VD: hits=[0.5, 3.2, 5.8, 9.1] → segs=[{start:0.5, end:3.2}, {start:5.8, end:9.1}]
-    let segs = [];
-    for (let k = 0; k < hits.length; k += 2) {
-      // Lấy cặp (hits[k], hits[k+1]) - chỉ lấy nếu cặp đầy đủ
-      if (k + 1 < hits.length) {
-        segs.push({ start: hits[k], end: hits[k + 1] });
-      }
-    }
-
-    return segs; // Return list các đoạn giao
+  rayCast(val, isVertRay, purpose='PANEL') {
+    return regionIntervals(this.state.points,this.state.openings||[],val,isVertRay,purpose);
   }
 
   // [VẼ HỌA ĐỒ] Render canvas - hiển thị mặt bằng, tấm, kết cấu, viền
@@ -1374,20 +1326,21 @@ export default class Engine {
     const mode=forceMode||document.getElementById('cfg_calcMode')?.value||'EXACT';
     const waste=1+this.getInputValue('cfg_waste',0,50,3)/100;
     const stock=this.getInputValue('cfg_carrierL',1,12,3),rodStock=this.getInputValue('cfg_rodStock',0.5,12,3);
-    const ceilingArea=this.getPolygonArea(),pW=this.getInputValue('cfg_pW',10,1000,100)/1000,gW=this.getInputValue('cfg_gW',0,500,0)/1000;
+    const grossArea=ringArea(this.state.points),ceilingArea=this.getPolygonArea(),structureArea=netArea(this.state.points,this.state.openings||[],'STRUCTURE'),pW=this.getInputValue('cfg_pW',10,1000,100)/1000,gW=this.getInputValue('cfg_gW',0,500,0)/1000;
     const panelGroups={};let panelLen=0,splices=0;
     for(const s of this.state.strips){panelLen+=s.totalLen;splices+=s.splices||0;for(const p of s.pieces){const key=p.len.toFixed(3);panelGroups[key] ||= {qty:0,status:p.status};panelGroups[key].qty++;}}
     const norm=mode==='NORM';if(norm){panelLen=ceilingArea/(pW+gW);}
-    const carrierSegments=this.state.carriers.map(c=>c.len),carrierLen=norm?ceilingArea/this.getInputValue('cfg_cX',0.5,5,1):carrierSegments.reduce((a,b)=>a+b,0);
+    const carrierSegments=this.state.carriers.map(c=>c.len),carrierLen=norm?structureArea/this.getInputValue('cfg_cX',0.5,5,1):carrierSegments.reduce((a,b)=>a+b,0);
     const edgeLengths=type=>this.state.edges.filter(e=>e.type===type).map(e=>Math.hypot(e.p2.x-e.p1.x,e.p2.y-e.p1.y));
     const trim=type=>{const a=edgeLengths(type),n=a.reduce((s,l)=>s+l,0);return {totalLen:n.toFixed(3),bars:Math.ceil(this.calculateOptimizedBars(a,3)*waste)};};
-    const hangers=norm?Math.ceil(ceilingArea/(this.getInputValue('cfg_cX',0.5,5,1)*this.getInputValue('cfg_tY',0.5,5,1))):this.state.hangers.length;
+    const hangers=norm?Math.ceil(structureArea/(this.getInputValue('cfg_cX',0.5,5,1)*this.getInputValue('cfg_tY',0.5,5,1))):this.state.hangers.length;
     const length=this.getRodLength();const rodPlan=length===null||length>rodStock?null:packCuts(Array(hangers).fill(length),rodStock,0.005);
     const carrierPlan=packCuts(carrierSegments.flatMap(l=>splitRun(l,stock)),stock);
     const warnings=[...new Set(this.state.warnings||[])];if(length!==null&&length>rodStock)warnings.push('Ty lắp dài hơn cây ty; cần quy cách được duyệt, không tự nối');if(length===null)warnings.push('Thiếu cao độ neo/trần cùng mốc hoặc chiều dài ty lắp hợp lệ');
     if(this.state.strips.some(s=>s.pieces.some(p=>p.status==='BAD')))warnings.push('Có đoạn dưới chiều dài cắt tối thiểu; cần kiểm tra');
+    if(this.state.openings?.length)warnings.push('Có lỗ kỹ thuật: đã trừ theo phạm vi từng lỗ; xương/ty gia cường và viền cong quanh lỗ cần cấu tạo riêng');
     if(norm)warnings.push('Định mức chỉ tham khảo; chi tiết thanh và nối lấy từ bố trí thực tế');
-    return {schemaVersion:1,mode,presetName:this.currentPreset?.name||'Tùy chỉnh',color:this.currentPreset?.color||'#E3F2FD',totalArea:ceilingArea.toFixed(3),ceilingArea,panelFaceArea:this.state.strips.reduce((n,s)=>n+s.totalLen*s.width,0),panelWidth:pW*1000,warnings,complete:!warnings.length,
+    return {schemaVersion:1,mode,presetName:this.currentPreset?.name||'Tùy chỉnh',color:this.currentPreset?.color||'#E3F2FD',totalArea:ceilingArea.toFixed(3),ceilingArea,grossArea,openingArea:grossArea-ceilingArea,structureArea,openingDetails:(this.state.openings||[]).map(h=>({id:h.id,name:h.name,scope:h.scope,area:h.type==='circle'?Math.PI*h.radius*h.radius:ringArea(h.points)})),panelFaceArea:this.state.strips.reduce((n,s)=>n+s.totalLen*s.width,0),panelWidth:pW*1000,warnings,complete:!warnings.length,
       carriers:{totalLen:carrierLen.toFixed(3),bars:Math.ceil((norm?Math.ceil(carrierLen/stock):carrierPlan.count)*waste),couplers:Math.ceil(this.state.carriers.reduce((n,c)=>n+splitRun(c.len,stock).length-1,0)*waste),stock,plan:carrierPlan},
       trims:trim('WALL_V'),shadowTrims:trim('SHADOW'),fascia:{totalLen:edgeLengths('FASCIA').reduce((a,b)=>a+b,0).toFixed(3),segments:edgeLengths('FASCIA')},
       hangers:{total:hangers,sets:Math.ceil(hangers*waste),tyRenBars:rodPlan?Math.ceil(rodPlan.count*waste):null,installedLength:length,stock:rodStock,plan:rodPlan,details:{tyRenMeters:length===null?null:(hangers*length).toFixed(3),noDan:Math.ceil(hangers*waste),ecuLongDen:Math.ceil(hangers*2*waste),mocTreoXuong:Math.ceil(hangers*waste)}},
@@ -1414,6 +1367,7 @@ export default class Engine {
   boqRows(m,zone) {
     const rows=[['Khu vực','Vật tư','Loại khối lượng','Chiều dài (mm)','Số lượng','ĐVT','Tổng dài (m)','Chế độ']];
     const add=(name,kind,len,qty,unit,total='')=>rows.push([zone,name,kind,len,qty,unit,total,m.mode]);
+    if(Number.isFinite(m.grossArea)){add('Diện tích trần bao','Diện tích','',m.grossArea.toFixed(3),'m²');for(const h of m.openingDetails||[])add('Lỗ: '+h.name+(h.scope==='PANEL'?' (chỉ tấm)':' (tấm/xương/ty)'),'Diện tích','',h.area.toFixed(3),'m²');add('Diện tích trần net','Diện tích','',m.ceilingArea.toFixed(3),'m²');}
     for(const [len,item] of Object.entries(m.panels.groups))add('Thanh '+m.presetName,'Đoạn lắp',Math.round(Number(len)*1000),item.qty,'Thanh',(Number(len)*item.qty).toFixed(3));
     add('Xương','Mét lắp','',m.carriers.totalLen,'m',m.carriers.totalLen);
     add('Xương','Cây mua',m.carriers.stock*1000,m.carriers.bars,'Cây',(m.carriers.bars*m.carriers.stock).toFixed(3));
@@ -1455,7 +1409,7 @@ export default class Engine {
 
   captureState() {
     const inputs={};document.querySelectorAll('input[id],select[id]').forEach(el=>{if(/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(el.id))inputs[el.id]=el.value;});
-    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
+    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),openings:structuredClone(this.state.openings||[]),zoneId:this.state.activeZoneId||null,zoneName:document.getElementById('projectName')?.value||'',edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
   }
 
   restoreState(data) {
@@ -1467,7 +1421,10 @@ export default class Engine {
     this.state.manualJointsMap=structuredClone(data.manualJointsMap||{});
     this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD'};
     // Preserve saved geometry, rather than regenerate U/L with missing legacy controls.
-    this.state.points=structuredClone(data.points||[]);this.state.mode=data.drawingClosed===false?'DRAW':'IDLE';this.syncEdges();this.state.edges.forEach((e,i)=>e.type=data.edgeTypes?.[i]||'WALL_V');
+    this.state.openings=structuredClone(data.openings||[]);this.state.activeZoneId=data.zoneId||null;
+    const name=document.getElementById('projectName');if(name)name.value=data.zoneName||this.state.projectZones.find(z=>z.id===data.zoneId)?.name||name.value;
+    if(data.zoneId){const index=this.state.projectZones.findIndex(z=>z.id===data.zoneId);this.state.editingIndex=index<0?null:index;}
+    this.state.points=structuredClone(data.points||[]);this.state.mode=data.drawingClosed===false?'DRAW':'IDLE';this.syncEdges();this.state.edges.forEach((e,i)=>e.type=data.edgeTypes?.[i]||'NONE');
     for(const [id,visible] of [['ui_preset',this.state.inputMode==='PRESET'],['ui_free',this.state.inputMode==='FREE']])document.getElementById(id)?.classList.toggle('hidden',!visible);
     this.calculate();this.centerView();this.draw();this.updateAddButtonUI();
   }
@@ -1946,6 +1903,7 @@ export default class Engine {
 
     // Clear all data
     this.state.projectZones = [];
+    this.state.openings = [];this.state.activeZoneId=null;
     this.state.points = [];
     this.state.strips = [];
     this.state.edges = [];

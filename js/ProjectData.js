@@ -1,3 +1,4 @@
+import {openingsError} from './PlanGeometry.js';
 export function validateCad(c){
   if(!c)return;if(c.version!==1||!Array.isArray(c.dimensions)||c.dimensions.length>2000)throw Error('Dữ liệu DIM không hợp lệ');
   const pt=p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&Math.abs(p.x)<1e7&&Math.abs(p.y)<1e7;
@@ -13,6 +14,9 @@ export function validateSnapshot(s) {
   if(!s.inputs||typeof s.inputs!=='object'||Array.isArray(s.inputs))throw new Error('Thiếu thông số dự án');
   for(const [k,v] of Object.entries(s.inputs)){if(!/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k)||!['number','string'].includes(typeof v)||typeof v==='number'&&!Number.isFinite(v))throw new Error('Thông số không hợp lệ: '+k);}
   if(s.manualJointsMap&&(!Object.values(s.manualJointsMap).every(a=>Array.isArray(a)&&a.every(Number.isFinite))))throw new Error('Mối nối không hợp lệ');
+  if(s.openings?.length){const err=openingsError(s.points,s.openings);if(err)throw Error(err);}else if(s.openings&&!Array.isArray(s.openings))throw Error('Danh sách lỗ không hợp lệ');
+  if(s.zoneId!==undefined&&s.zoneId!==null&&!['string','number'].includes(typeof s.zoneId))throw Error('ID vùng không hợp lệ');
+  if(s.zoneName!==undefined&&typeof s.zoneName!=='string')throw Error('Tên vùng không hợp lệ');
   validateCad(s.cad);return s;
 }
 export function validateProject(p){

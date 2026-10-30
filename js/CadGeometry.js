@@ -57,8 +57,8 @@ export function resolveCadPoint(input,last,cursor,ortho=false){
   throw Error('Không phải tọa độ');
 }
 export class CadSession{
-  constructor(points=[],dimensions=[],circles=[]){this.draft={points:structuredClone(points),closed:points.length>=3};this.dimensions=structuredClone(dimensions);this.circles=structuredClone(circles);this.tool=null;this.picks=[];this.history=[];this.future=[];this.message='PL: vẽ vùng · F8: khóa hướng · F3: bắt điểm';}
-  snapshot(){return structuredClone({draft:this.draft,dimensions:this.dimensions,circles:this.circles});}
+  constructor(points=[],dimensions=[],circles=[],openings=[]){this.draft={points:structuredClone(points),closed:points.length>=3};this.openings=structuredClone(openings);this.dimensions=structuredClone(dimensions);this.circles=structuredClone(circles);this.tool=null;this.picks=[];this.history=[];this.future=[];this.message='PL: vẽ vùng · F8: khóa hướng · F3: bắt điểm';}
+  snapshot(){return structuredClone({draft:this.draft,dimensions:this.dimensions,circles:this.circles,openings:this.openings});}
   record(){this.history.push(this.snapshot());if(this.history.length>100)this.history.shift();this.future=[];}
   start(tool){if(tool==='PL'||tool==='REC'){this.record();this.draft={points:[],closed:false};}this.tool=tool;this.picks=[];this.message=tool==='CIRCLE'?'CIRCLE: chọn tâm đường tròn':tool==='CAL'?'CAL: chọn điểm thứ nhất':tool==='PL'?'PL: chọn điểm đầu':tool==='REC'?'REC: chọn góc thứ nhất':tool==='DIM'||tool==='DLI'?'DIM: chọn điểm thứ nhất':'DIST: chọn điểm thứ nhất';}
   point(p){

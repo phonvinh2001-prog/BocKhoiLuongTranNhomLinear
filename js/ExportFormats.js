@@ -26,6 +26,7 @@ export function layoutDXF(state){
   for(const p of state.carrierJoints||[]){const a=[{x:p.x-.06,y:p.y-.06},{x:p.x+.06,y:p.y-.06},{x:p.x+.06,y:p.y+.06},{x:p.x-.06,y:p.y+.06}];a.forEach((q,i)=>line('QS-OUT-NOI-XUONG',q,a[(i+1)%4]));}
   for(const p of state.hangers||[]){pair(0,'CIRCLE');pair(8,'QS-OUT-TY');pair(10,p.x*1000);pair(20,-p.y*1000);pair(30,0);pair(40,50);}
   for(const e of state.edges||[])if(e.type!=='NONE')line(e.type==='WALL_V'?'TRAN-V-GOC':e.type==='FASCIA'?'TRAN-MAT-DUNG-A':'TRAN-SHADOW',e.p1,e.p2);
+  for(const h of state.openings||[]){const layer=h.scope==='PANEL'?'QS-LO-TAM':'QS-LO-XUYEN-TRAN';if(h.type==='circle'){pair(0,'CIRCLE');pair(8,layer);pair(10,h.center.x*1000);pair(20,-h.center.y*1000);pair(30,0);pair(40,h.radius*1000);}else{pair(0,'LWPOLYLINE');pair(8,layer);pair(90,h.points.length);pair(70,1);for(const p of h.points){pair(10,p.x*1000);pair(20,-p.y*1000);}}}
   for(const q of state.circles||[]){pair(0,'CIRCLE');pair(8,'QS-REF-CIRCLE');pair(10,q.center.x*1000);pair(20,-q.center.y*1000);pair(30,0);pair(40,q.radius*1000);}
   // Exploded annotations remain readable in basic DXF viewers; these are not driving dimensions.
   for(const d of state.dimensions||[]){const g=dimensionGeometry(d);if(!g)continue;line('QS-DIM',d.a,g.q1);line('QS-DIM',d.b,g.q2);line('QS-DIM',g.q1,g.q2);for(const q of [g.q1,g.q2])line('QS-DIM',{x:q.x-.04,y:q.y+.04},{x:q.x+.04,y:q.y-.04});pair(0,'TEXT');pair(8,'QS-DIM');pair(10,(g.q1.x+g.q2.x)*500);pair(20,-(g.q1.y+g.q2.y)*500);pair(30,0);pair(40,60);pair(1,(g.value*1000).toFixed(0)+' mm');}

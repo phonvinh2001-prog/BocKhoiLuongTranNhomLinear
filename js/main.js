@@ -4,6 +4,7 @@
 import Engine from "./Engine.js";
 import VisualOverlay from "./VisualOverlay.js";
 import WorkspaceUI from "./WorkspaceUI.js";
+import PlanController from './PlanController.js';
 import CadController from "./CadController.js";
 
 console.log("🏗️ System Init: Loading ALU-MASTER v17 Modules...");
@@ -42,6 +43,7 @@ if (app) {
     app.loadState();
     window.workspaceUI = new WorkspaceUI(app);
     app.cad = new CadController(app, window.workspaceUI);
+    app.plan = new PlanController(app.cad);
     const loader = document.getElementById("app-loader");
     if (loader) loader.style.display = "none";
   }, 200);
