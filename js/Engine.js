@@ -879,7 +879,7 @@ export default class Engine {
   // --- TÍNH TOÁN CỐT LÕI (CORE CALCULATION) ---
   // [LUỒNG]: Rải tấm → Cắt tấm → Tính xương → Tính ty → Vẽ
   calculate() {
-    if (this.state.points.length < 3) {this.state.strips=[];this.state.carriers=[];this.state.hangers=[];return;}
+    if (this.state.mode==='DRAW' || this.state.points.length < 3) {this.state.strips=[];this.state.carriers=[];this.state.hangers=[];return;}
 
     // [HÌNH U – THI CÔNG] Phát hiện hình U & lưu vào state
     this.state.shapeType = this.detectShapeType();
@@ -1460,13 +1460,14 @@ export default class Engine {
 
   restoreState(data) {
     if(!data)return;
+    this.state.cadData=data.cad||null;
     this.state.inputMode=data.inputMode||'FREE';
     for(const [k,v] of Object.entries(data.inputs||{})){const el=document.getElementById(k);if(el&&/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k))el.value=v;}
     this.state.jointConfig=structuredClone(data.jointConfig||{pattern:data.inputs?.cfg_joint_pattern||'DEFAULT',patternShift:Number(data.inputs?.cfg_joint_shift||50)/100});
     this.state.manualJointsMap=structuredClone(data.manualJointsMap||{});
     this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD'};
     // Preserve saved geometry, rather than regenerate U/L with missing legacy controls.
-    this.state.points=structuredClone(data.points||[]);this.state.mode='IDLE';this.syncEdges();this.state.edges.forEach((e,i)=>e.type=data.edgeTypes?.[i]||'WALL_V');
+    this.state.points=structuredClone(data.points||[]);this.state.mode=data.drawingClosed===false?'DRAW':'IDLE';this.syncEdges();this.state.edges.forEach((e,i)=>e.type=data.edgeTypes?.[i]||'WALL_V');
     for(const [id,visible] of [['ui_preset',this.state.inputMode==='PRESET'],['ui_free',this.state.inputMode==='FREE']])document.getElementById(id)?.classList.toggle('hidden',!visible);
     this.calculate();this.centerView();this.draw();this.updateAddButtonUI();
   }
@@ -1482,6 +1483,7 @@ export default class Engine {
 
     // [TÍNH TOÁN] Đảm bảo dữ liệu tính toán mới nhất
     this.calculate();
+    if(!this.state.strips.length)return this.showFeedback("Biên/thông số chưa hợp lệ để lưu vùng","error");
 
     // [BƯỚC 1] LẤY DỮ LIỆU TẤMTRẦN
     // [THỐNG KÊ] Tuyển tập chiều dài tất cả các mảnh tấm (sau cắt)
@@ -2036,170 +2038,11 @@ export default class Engine {
   // =========================================================
 
   setupCADListeners() {
-    // 1. Command Bar Input
-    const cmdInput = document.getElementById("cmd-input");
-    if (cmdInput) {
-      console.log("[AutoCAD] Command Input FOUND, attaching listeners.");
-      cmdInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          console.log("[AutoCAD] Command Enter:", cmdInput.value);
-          this.handleCommand(cmdInput.value);
-          cmdInput.value = ""; // Clear
-        }
-      });
-    } else {
-      console.error("[AutoCAD] Command Input NOT FOUND in DOM!");
-    }
-
-    // 2. Global Hotkeys (F8, Esc)
-    window.addEventListener("keydown", (e) => {
-      // Ortho Toggle (F8)
-      if (e.key === "F8") {
-        this.state.CMD.isOrtho = !this.state.CMD.isOrtho;
-        this.showFeedback(
-          `Ortho: ${this.state.CMD.isOrtho ? "ON" : "OFF"}`,
-          "info",
-        );
-        this.draw();
-      }
-      // Cancel (Esc)
-      if (e.key === "Escape") {
-        if (this.state.mode === "DRAW") {
-          this.finishDraw();
-          this.showFeedback("Drawing Finished", "success");
-        } else {
-          this.state.CMD.activeCmd = null;
-          this.showFeedback("Command Cancelled", "warning");
-        }
-        if (cmdInput) cmdInput.blur(); // Unfocus
-      }
-      // Quick Focus Command Bar (Space / Enter if not in input)
-      if (
-        (e.key === " " || e.key === "Enter") &&
-        document.activeElement !== cmdInput
-      ) {
-        // Only focus if idle or drawing
-        if (this.state.mode === "DRAW" || this.state.mode === "IDLE") {
-          if (cmdInput) {
-            cmdInput.focus();
-            e.preventDefault();
-          }
-        }
-      }
-    });
+    // CadController owns keyboard and command listeners after the workspace is mounted.
   }
 
-  // CORE: Command Processor
-  handleCommand(inputStr) {
-    if (!inputStr) return;
-    if (this.state.inputMode !== "FREE") return; // Block commands if not in Free Draw logic
+  handleCommand(text) { this.cad?.command(text); }
 
-    // [HISTORY] Add to history (UI update logic here if needed)
-    this.state.CMD.history.push(inputStr);
-
-    const parsed = CAD_UTILS.parseInput(inputStr);
-    if(!parsed)return this.showFeedback("Cú pháp tọa độ không hợp lệ","error");
-    const lastPt =
-      this.state.points.length > 0
-        ? this.state.points[this.state.points.length - 1]
-        : { x: 0, y: 0 };
-
-    // --- A. COMMANDS ---
-    if (parsed.type === "CMD") {
-      switch (parsed.val) {
-        case "L":
-        case "LINE":
-          this.resetDraw();
-          this.showFeedback("Line Tool Active", "info");
-          break;
-        case "C":
-        case "CLOSE":
-          if (this.state.mode === "DRAW") this.finishDraw();
-          break;
-        case "U":
-        case "UNDO":
-          if (this.state.points.length > 0) {
-            this.state.points.pop();
-            this.draw();
-          }
-          break;
-        case "Z":
-        case "ZOOM":
-          this.centerView();
-          this.showFeedback("Zoom Extents", "success");
-          break;
-        case "O":
-        case "OFFSET":
-          // Simple toggle offset mode visualization (implementation complex, alert for now)
-          alert(
-            "Offset Command: Chọn cạnh để offset (Tính năng đang phát triển)",
-          );
-          break;
-        case "M":
-        case "MOVE":
-          alert(
-            "Move Command: Chọn điểm để di chuyển (Tính năng đang phát triển)",
-          );
-          break;
-        case "REC":
-          this.resetDraw();
-          this.showFeedback("Rectangle Tool (Vẽ 4 điểm)", "info");
-          break;
-        default:
-          this.showFeedback(`Unknown command: ${parsed.val}`, "error");
-      }
-      return;
-    }
-
-    // --- B. COORDINATE ENTRY (DRAW MODE ONLY) ---
-    if (this.state.mode === "DRAW") {
-      let newPt = null;
-
-      // 1. Absolute Coord (x,y)
-      if (parsed.type === "ABS_COORD") {
-        newPt = { x: parsed.x, y: parsed.y };
-      }
-      // 2. Relative Coord (@x,y)
-      else if (parsed.type === "REL_COORD") {
-        newPt = { x: lastPt.x + parsed.x, y: lastPt.y + parsed.y };
-      }
-      // 3. Polar (@dist<ang)
-      else if (parsed.type === "POLAR") {
-        newPt = CAD_UTILS.calcDest(lastPt, parsed.dist, parsed.angle);
-      }
-      // 4. Direct Distance (Number)
-      else if (parsed.type === "DIST") {
-        // Calculate direction from LAST POINT to CURRENT MOUSE
-        // Vector = Mouse - Last
-        const dx = this.state.CMD.cursorPos.x - lastPt.x;
-        const dy = this.state.CMD.cursorPos.y - lastPt.y;
-        const currentAng = Math.atan2(dy, dx);
-
-        // Apply Ortho Snapping for Direct Distance too
-        let angle = currentAng;
-        if (this.state.CMD.isOrtho) {
-          // Snap angle to nearest 90 deg
-          angle = Math.round(currentAng / (Math.PI / 2)) * (Math.PI / 2);
-        }
-
-        newPt = {
-          x: lastPt.x + parsed.val * Math.cos(angle),
-          y: lastPt.y + parsed.val * Math.sin(angle),
-        };
-      }
-
-      if (newPt) {
-        this.state.points.push(newPt);
-        this.draw();
-        this.showFeedback(
-          `Point added at (${newPt.x.toFixed(2)}, ${newPt.y.toFixed(2)})`,
-          "success",
-        );
-      }
-    }
-  }
-
-  // [MODIFIED] Helper to draw UI overlay (Ghost lines, Tooltips)
   drawCADOverlay() {
     const ctx = this.ctx;
     const t = this.state.CMD;
@@ -2537,7 +2380,7 @@ export default class Engine {
   }
 
   exportDXF() {
-    this.calculate();if(!this.state.strips.length)return this.showFeedback('Chưa có vùng','error');this.downloadFile('QS_BoTri.dxf',layoutDXF(this.state),'application/dxf');
+    this.calculate();if(!this.state.strips.length)return this.showFeedback('Chưa có vùng','error');this.downloadFile('QS_BoTri.dxf',layoutDXF({...this.state,dimensions:this.cad?.session.dimensions||[],circles:this.cad?.session.circles||[]}),'application/dxf');
   }
 
 }

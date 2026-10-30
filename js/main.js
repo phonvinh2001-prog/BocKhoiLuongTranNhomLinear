@@ -4,6 +4,7 @@
 import Engine from "./Engine.js";
 import VisualOverlay from "./VisualOverlay.js";
 import WorkspaceUI from "./WorkspaceUI.js";
+import CadController from "./CadController.js";
 
 console.log("🏗️ System Init: Loading ALU-MASTER v17 Modules...");
 
@@ -40,6 +41,7 @@ if (app) {
     // [DATA PERSISTENCE] Khôi phục dữ liệu cũ
     app.loadState();
     window.workspaceUI = new WorkspaceUI(app);
+    app.cad = new CadController(app, window.workspaceUI);
     const loader = document.getElementById("app-loader");
     if (loader) loader.style.display = "none";
   }, 200);

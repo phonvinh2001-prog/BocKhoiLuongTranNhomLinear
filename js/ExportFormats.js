@@ -1,3 +1,4 @@
+import {dimensionGeometry} from './CadGeometry.js';
 const enc=new TextEncoder();
 const xml=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'');
 function crc32(bytes){let crc=0xffffffff;for(const b of bytes){crc^=b;for(let i=0;i<8;i++)crc=crc&1?(crc>>>1)^0xedb88320:crc>>>1;}return (crc^0xffffffff)>>>0;}
@@ -18,12 +19,15 @@ export function xlsxBytes(sheets){
 export function layoutDXF(state){
   const pairs=[];const pair=(a,b)=>pairs.push(String(a),String(b));
   pair(0,'SECTION');pair(2,'HEADER');pair(9,'$ACADVER');pair(1,'AC1015');pair(9,'$INSUNITS');pair(70,4);pair(0,'ENDSEC');pair(0,'SECTION');pair(2,'ENTITIES');
-  const line=(layer,a,b)=>{pair(0,'LINE');pair(8,layer);pair(10,a.x*1000);pair(20,a.y*1000);pair(30,0);pair(11,b.x*1000);pair(21,b.y*1000);pair(31,0);};
+  const line=(layer,a,b)=>{pair(0,'LINE');pair(8,layer);pair(10,a.x*1000);pair(20,-a.y*1000);pair(30,0);pair(11,b.x*1000);pair(21,-b.y*1000);pair(31,0);};
   (state.points||[]).forEach((p,i)=>line('TRAN-BIEN-BAO',p,state.points[(i+1)%state.points.length]));
   for(const s of state.strips||[]){let pos=s.start;for(let i=0;i<s.pieces.length;i++){const p=s.pieces[i],at=t=>s.isVert?{x:s.pos+s.width/2,y:t}:{x:t,y:s.pos+s.width/2};line('QS-OUT-TAM',at(pos),at(pos+p.len));pos+=p.len;if(i<s.pieces.length-1){const q=at(pos),r=.06;line('QS-OUT-NOI-TAM',{x:q.x-r,y:q.y-r},{x:q.x+r,y:q.y+r});line('QS-OUT-NOI-TAM',{x:q.x+r,y:q.y-r},{x:q.x-r,y:q.y+r});}}}
   for(const c of state.carriers||[]){let n=0;const at=t=>({x:c.x1+(c.x2-c.x1)*t/c.len,y:c.y1+(c.y2-c.y1)*t/c.len});for(const p of c.pieces||[c.len]){line('QS-OUT-XUONG',at(n),at(n+p));n+=p;}}
   for(const p of state.carrierJoints||[]){const a=[{x:p.x-.06,y:p.y-.06},{x:p.x+.06,y:p.y-.06},{x:p.x+.06,y:p.y+.06},{x:p.x-.06,y:p.y+.06}];a.forEach((q,i)=>line('QS-OUT-NOI-XUONG',q,a[(i+1)%4]));}
-  for(const p of state.hangers||[]){pair(0,'CIRCLE');pair(8,'QS-OUT-TY');pair(10,p.x*1000);pair(20,p.y*1000);pair(30,0);pair(40,50);}
+  for(const p of state.hangers||[]){pair(0,'CIRCLE');pair(8,'QS-OUT-TY');pair(10,p.x*1000);pair(20,-p.y*1000);pair(30,0);pair(40,50);}
   for(const e of state.edges||[])if(e.type!=='NONE')line(e.type==='WALL_V'?'TRAN-V-GOC':e.type==='FASCIA'?'TRAN-MAT-DUNG-A':'TRAN-SHADOW',e.p1,e.p2);
+  for(const q of state.circles||[]){pair(0,'CIRCLE');pair(8,'QS-REF-CIRCLE');pair(10,q.center.x*1000);pair(20,-q.center.y*1000);pair(30,0);pair(40,q.radius*1000);}
+  // Exploded annotations remain readable in basic DXF viewers; these are not driving dimensions.
+  for(const d of state.dimensions||[]){const g=dimensionGeometry(d);if(!g)continue;line('QS-DIM',d.a,g.q1);line('QS-DIM',d.b,g.q2);line('QS-DIM',g.q1,g.q2);for(const q of [g.q1,g.q2])line('QS-DIM',{x:q.x-.04,y:q.y+.04},{x:q.x+.04,y:q.y-.04});pair(0,'TEXT');pair(8,'QS-DIM');pair(10,(g.q1.x+g.q2.x)*500);pair(20,-(g.q1.y+g.q2.y)*500);pair(30,0);pair(40,60);pair(1,(g.value*1000).toFixed(0)+' mm');}
   pair(0,'ENDSEC');pair(0,'EOF');return pairs.join('\r\n')+'\r\n';
 }

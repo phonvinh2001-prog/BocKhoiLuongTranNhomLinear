@@ -1,12 +1,12 @@
 # ALU-MASTER STUDIO
 
-## Bản nâng cấp v18 — ứng viên kiểm tra
+## Bản nâng cấp v18.2 — ứng viên kiểm tra
 
-Giao diện v18.1: khu vực bên trái, bản vẽ trung tâm, thuộc tính bên phải và QS bên dưới; lớp vật tư bật/tắt độc lập, bảng Lắp đặt/Cắt cây/Đặt mua/Cảnh báo, tìm vật tư và menu xuất tập trung. Xem [ghi chú giao diện](docs/UI-v18.1.md).
+Giao diện: khu vực bên trái, bản vẽ trung tâm, thuộc tính bên phải và QS bên dưới; lớp vật tư bật/tắt độc lập, bảng Lắp đặt/Cắt cây/Đặt mua/Cảnh báo, tìm vật tư và menu xuất tập trung. Xem [ghi chú giao diện](docs/UI-v18.1.md).
 
-Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Kiểm thử: `node --test tests/regression.test.mjs`. Node >=20, không cần cài dependency.
+Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Kiểm thử: `node --test tests/regression.test.mjs tests/cad-workflow.test.mjs`. Node >=20, không cần cài dependency.
 
-Đã sửa kết quả CSV/lưu–mở, quy tắc xương/ty 150 mm và ngưỡng bù >300 mm; thêm cao độ ty, bảng cắt cây, Excel và DXF xuất. Xem [phạm vi và giới hạn v18](docs/RELEASE-v18.md). Nhập DXF/PDF, lỗ mở, hướng tùy ý và backend mới vẫn nằm trong lộ trình, chưa có trong bản này.
+Đã sửa kết quả CSV/lưu–mở, quy tắc xương/ty 150 mm và ngưỡng bù >300 mm; thêm cao độ ty, bảng cắt cây, Excel và DXF xuất. Xem [phạm vi và giới hạn v18](docs/RELEASE-v18.md). v18.2 bổ sung nhập thông số có đơn vị, PL/REC/C, F8, OSNAP, DIM/DIST, nhập DXF ASCII và nền PDF/ảnh có hiệu chuẩn. Xem [hướng dẫn CAD và giới hạn](docs/CAD-v18.2.md). Lỗ mở, hướng rải tùy ý và backend mới vẫn nằm trong lộ trình.
 
 **Công cụ bóc khối lượng trần nhôm chuyên nghiệp.**
 
@@ -32,7 +32,7 @@ Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Kiểm thử: `node --te
 ## Hướng dẫn cài đặt & Sử dụng
 
 1. **Clone repo**: `git clone https://github.com/phonvinh2001-prog/BocKhoiLuongTranNhomLinear.git`
-2. **Mở ứng dụng**: Mở file `index.html` trực tiếp trên trình duyệt hoặc sử dụng Live Server.
+2. **Mở ứng dụng**: Chạy `node server.mjs` rồi mở `http://127.0.0.1:8765`; hoặc sử dụng Live Server. Bản mã nguồn ES Modules cần HTTP server.
 3. **Sử dụng**:
    - Nhập tham số kỹ thuật (bản rộng tấm, bước xương, hệ số hao hụt...).
    - Vẽ mặt bằng phòng.
