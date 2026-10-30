@@ -16,6 +16,7 @@ export class JointSolver {
    * @returns {Array} Mảng các mảnh { len: number, type: 'MANUAL'|'AUTO' }
    */
   solveStrip(totalLen, maxL, config, minCut = 0.2) {
+    if(!Number.isFinite(totalLen)||totalLen<=0||!Number.isFinite(maxL)||maxL<=0||!Number.isFinite(minCut)||minCut<0||minCut>maxL)throw new Error('Quy cách chia tấm không hợp lệ');
     const {
       manualJoints = [],
       pattern = "DEFAULT",
@@ -27,7 +28,8 @@ export class JointSolver {
     // Sắp xếp và lọc các điểm nằm trong range (0, totalLen)
     let sortedJoints = [...manualJoints]
       .filter((j) => j > 0.001 && j < totalLen - 0.001)
-      .sort((a, b) => a - b);
+      .sort((a, b) => a - b)
+      .filter((x,i,a)=>Number.isFinite(x)&&(!i||Math.abs(x-a[i-1])>0.001));
 
     // Tạo các "Segment Cứng" giữa các điểm mốc
     // VD: [0, ...manualJoints, totalLen] -> [Segment 1, Segment 2, ...]
@@ -88,7 +90,7 @@ export class JointSolver {
 
     // Thuật toán: Xếp gạch
     if (pattern === "BRICK" && isOddRow) {
-      let firstPieceMax = maxL * shift;
+      let firstPieceMax = maxL * Math.min(0.99,Math.max(0.01,shift));
       if (remain <= firstPieceMax) {
         return [remain];
       } else {
@@ -136,3 +138,4 @@ export class JointSolver {
     return x - Math.floor(x);
   }
 }
+

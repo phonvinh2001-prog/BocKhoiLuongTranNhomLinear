@@ -630,3 +630,6 @@ select.success {
 #cursor-tooltip.hidden {
   opacity: 0;
 }
+
+
+.qs-table{border-collapse:collapse;width:100%;font-size:12px}.qs-table td,.qs-table th{border:1px solid #ccc;padding:7px;text-align:left}.qs-table th{background:#e8f0fe;position:sticky;top:0}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0f62fe;outline-offset:2px}.modal-body{overflow:auto}

@@ -147,9 +147,11 @@ export default class VisualOverlay {
       }
     });
 
+    (state.carrierJoints||[]).forEach(p=>{ctx.strokeStyle='#b45309';ctx.lineWidth=0.025;ctx.strokeRect(p.x-0.06,p.y-0.06,0.12,0.12);});
     // [RESTORE STATE] Khôi phục trạng thái canvas ban đầu
     ctx.restore();
 
     // [❌ LOẠI BỎ] Không cần legend nữa vì luôn hiển thị
   }
 }
+
