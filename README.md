@@ -2,6 +2,8 @@
 
 ## Bản nâng cấp v18 — ứng viên kiểm tra
 
+Giao diện v18.1: khu vực bên trái, bản vẽ trung tâm, thuộc tính bên phải và QS bên dưới; lớp vật tư bật/tắt độc lập, bảng Lắp đặt/Cắt cây/Đặt mua/Cảnh báo, tìm vật tư và menu xuất tập trung. Xem [ghi chú giao diện](docs/UI-v18.1.md).
+
 Chạy `node server.mjs`, mở `http://127.0.0.1:8765`. Kiểm thử: `node --test tests/regression.test.mjs`. Node >=20, không cần cài dependency.
 
 Đã sửa kết quả CSV/lưu–mở, quy tắc xương/ty 150 mm và ngưỡng bù >300 mm; thêm cao độ ty, bảng cắt cây, Excel và DXF xuất. Xem [phạm vi và giới hạn v18](docs/RELEASE-v18.md). Nhập DXF/PDF, lỗ mở, hướng tùy ý và backend mới vẫn nằm trong lộ trình, chưa có trong bản này.

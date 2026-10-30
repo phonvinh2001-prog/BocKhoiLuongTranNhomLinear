@@ -3,6 +3,7 @@
 // 1. Nhập khẩu các bộ phận từ kho (Modules)
 import Engine from "./Engine.js";
 import VisualOverlay from "./VisualOverlay.js";
+import WorkspaceUI from "./WorkspaceUI.js";
 
 console.log("🏗️ System Init: Loading ALU-MASTER v17 Modules...");
 
@@ -38,13 +39,14 @@ if (app) {
 
     // [DATA PERSISTENCE] Khôi phục dữ liệu cũ
     app.loadState();
+    window.workspaceUI = new WorkspaceUI(app);
+    const loader = document.getElementById("app-loader");
+    if (loader) loader.style.display = "none";
   }, 200);
 }
 
 // --- QUAN TRỌNG: GÁN VÀO WINDOW ---
 if (app) {
   window.app = app;
-  // Hide Loader
-  const loader = document.getElementById("app-loader");
-  if (loader) loader.style.display = "none";
 }
+
