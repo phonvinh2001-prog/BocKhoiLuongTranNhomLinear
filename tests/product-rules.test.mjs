@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {sampleLibrary,validateLibrary,DEFAULT_SUPPLY} from '../js/ProductRules.js';
+import {panelPurchase} from '../js/PanelPurchase.js';
+import {fixture} from './helpers/quantity-fixture.mjs';
+const strip=(len,qty)=>Array.from({length:qty},()=>({pieces:[{len}]}));
+test('GopKichThuoc: mẫu gộp 168 chi tiết và bảo toàn chiều dài',()=>{const p=panelPurchase([...strip(1.5,124),...strip(3.58,12),...strip(2.25,32)],{...DEFAULT_SUPPLY,minLength:2000});assert.equal(p.totalItems,168);assert.deepEqual(p.summary.map(s=>[s.length,s.quantity]).sort((a,b)=>a[0]-b[0]),[[3005,62],[3580,12],[4505,16]]);assert.equal(p.kerfLoss,390);assert.ok(Math.abs(p.totalLength-p.totalUsed-p.kerfLoss-p.allowanceLoss-p.totalWaste)<1e-6);});
+test('Phôi cố định + dư gia công không vượt 6000 mm',()=>{const p=panelPurchase(strip(2,4),{...DEFAULT_SUPPLY,stockMode:'fixed',fixedLength:6000,endAllowance:20});assert.equal(p.stocks.length,2);assert.ok(p.stocks.every(s=>s.length===6000&&s.remaining>=0));assert.equal(p.allowanceLoss,40);});
+test('Phôi theo khoảng không đi ngoài lưới hoặc bỏ mất chi tiết',()=>{const p=panelPurchase(strip(1.5,8),{...DEFAULT_SUPPLY,stockMode:'standard',minLength:3000,maxLength:6000,stepSize:100});assert.equal(p.totalItems,8);assert.ok(p.stocks.every(s=>s.length>=3000&&s.length<=6000&&s.length%100===0));});
+test('Dự phòng không sửa phiếu cắt net',()=>{const p=panelPurchase(strip(1.5,4),DEFAULT_SUPPLY,10);assert.ok(p.purchase.every(s=>s.quantity===Math.ceil(s.netQuantity*1.1)));assert.equal(p.totalItems,4);});
+test('Bộ sản phẩm draft hợp lệ, SKU trùng/quy tắc âm bị chặn',()=>{const s=sampleLibrary();assert.equal(validateLibrary(s),s);assert.equal(s.products[0].rules.approved,false);s.products.push(structuredClone(s.products[0]));assert.throws(()=>validateLibrary(s));s.products.pop();s.products[0].rules.panelSupply.kerf=-1;assert.throws(()=>validateLibrary(s));});
+test('Mã và quy tắc giữ qua snapshot; phụ kiện tính từ kết quả đã lưu',()=>{const {app}=fixture();const r=sampleLibrary().products[0].rules;r.accessories=[{sku:'TEST-NEO',name:'Neo',unit:'Cái',basis:'hanger',factor:1}];app.currentPreset.rules=r;const s=app.captureState();app.restoreState(s);assert.deepEqual(app.currentPreset.rules,r);const record=app.buildZoneRecord('A','A'),rows=app.boqRows(record.stats.accessories,'A');assert.equal(rows.find(r=>r[1]==='Neo [TEST-NEO]')[4],24);assert.ok(rows.some(r=>r[1]==='Xương [DRAFT-XUONG]'));});

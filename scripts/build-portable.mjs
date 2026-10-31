@@ -6,4 +6,4 @@ function moduleURL(file){if(cache.has(file))return cache.get(file);const text=fs
 let html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 html=html.replace(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g,(m,name)=>'<style>'+fs.readFileSync(path.join(root,name),'utf8')+'</style>');
 html=html.replace(/src="js\/main.js[^\"]*"/,'src="'+moduleURL(path.join(root,'js/main.js'))+'"');
-const target=path.resolve(process.argv[2]||path.join(root,'ALU-MASTER-v18.5.1.html'));fs.writeFileSync(target,html);console.log(target);
+const target=path.resolve(process.argv[2]||path.join(root,'ALU-MASTER-v19.0.html'));fs.writeFileSync(target,html);console.log(target);

@@ -1,0 +1,46 @@
+{
+  "kind": "QS_PRODUCT_LIBRARY",
+  "version": 1,
+  "products": [
+    {
+      "name": "C85 · mẫu cần cập nhật",
+      "pW": 85,
+      "gW": 15,
+      "maxL": 6,
+      "color": "#E3F2FD",
+      "rules": {
+        "sku": "DRAFT-C85",
+        "revision": "draft-1",
+        "approved": false,
+        "carrierStockMm": 3000,
+        "rodStockMm": 3000,
+        "wallStockMm": 3000,
+        "shadowStockMm": 3000,
+        "fasciaStockMm": 3000,
+        "carrierStepMm": 1000,
+        "hangerStepMm": 1000,
+        "carrierSku": "DRAFT-XUONG",
+        "rodSku": "DRAFT-TY",
+        "wallSku": "DRAFT-V",
+        "shadowSku": "DRAFT-SHADOW",
+        "fasciaSku": "DRAFT-FASCIA",
+        "panelSupply": {
+          "stockMode": "custom",
+          "productionMode": "simple",
+          "minLength": 3500,
+          "maxLength": 6000,
+          "stepSize": 100,
+          "fixedLength": 6000,
+          "kerf": 5,
+          "endAllowance": 0,
+          "orderIncrement": 1,
+          "mergeTolerance": 0,
+          "maxWaste": 100,
+          "maxTypes": 2,
+          "maxStockTypes": 3
+        },
+        "accessories": []
+      }
+    }
+  ]
+}

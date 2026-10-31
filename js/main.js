@@ -1,3 +1,4 @@
+import ProductLibraryUI from './ProductLibraryUI.js';
 /* File: js/main.js */
 
 // 1. Nhập khẩu các bộ phận từ kho (Modules)
@@ -44,6 +45,7 @@ if (app) {
     window.workspaceUI = new WorkspaceUI(app);
     app.cad = new CadController(app, window.workspaceUI);
     app.plan = new PlanController(app.cad);
+    app.productLibraryUI=new ProductLibraryUI(app);
     const loader = document.getElementById("app-loader");
     if (loader) loader.style.display = "none";
   }, 200);

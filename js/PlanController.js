@@ -1,3 +1,4 @@
+import {currentResult} from './CalculationVersion.js';
 import {CadSession,parseCadInput,polygonError,segmentsOf,distance,project} from './CadGeometry.js';
 import {openingsError,openingArea,openingBounds,openingLocation,pointInRegion,regionsOverlap} from './PlanGeometry.js';
 import {normalizeRegions,linkSnapshot,translateRegion,regionHits,overlappingRegion} from './RegionEditing.js';
@@ -71,7 +72,7 @@ export default class PlanController{
     const a=this.app,index=a.state.projectZones.findIndex(z=>z.id===a.state.activeZoneId);if(index<0&&!create)return false;
     if(a.state.mode==='DRAW'||polygonError(a.state.points))throw Error('Khép kín hoặc hủy vùng đang vẽ trước');
     const current=a.captureState(),previous=index>=0?a.state.projectZones[index]:null;
-    if(!force&&previous?.stats?.accessories?.schemaVersion===1&&workSignature(current)===workSignature(previous.savedState))return false;
+    if(!force&&previous?.stats?.accessories?.schemaVersion===1&&currentResult(previous)&&workSignature(current)===workSignature(previous.savedState))return false;
     this.persisting=true;
     try{
       if(calculate&&quantitySignature(current)!==this.lastCalculatedSignature)a.calculate();

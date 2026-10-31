@@ -16,5 +16,5 @@ export function interactionState(cad,plan,state){
   const local=drawing||!!plan.draft;
   return {kind,busy,ready,step,canClose:['PL','HPL'].includes(kind)&&ready,canUndo:plan.moving?!!plan.moving.base:local?(s.history.length>0||s.picks.length>0):busy?s.picks.length>0:plan.history.length>0,canRedo:plan.moving?false:local?s.future.length>0:!busy&&plan.future.length>0};
 }
-export function workSignature(s){return JSON.stringify([s.zoneId,s.zoneName,s.inputMode,s.inputs,s.points,s.openings||[],s.edgeTypes,s.manualJointsMap,s.jointConfig,s.presetName,s.presetColor,s.cad]);}
-export function quantitySignature(s){return JSON.stringify([s.inputs,s.points,s.openings||[],s.edgeTypes,s.manualJointsMap,s.jointConfig,s.presetName,s.presetColor]);}
+export function workSignature(s){return JSON.stringify([s.zoneId,s.zoneName,s.inputMode,s.inputs,s.points,s.openings||[],s.edgeTypes,s.manualJointsMap,s.jointConfig,s.presetName,s.presetColor,s.productRules,s.cad]);}
+export function quantitySignature(s){return JSON.stringify([s.inputs,s.points,s.openings||[],s.edgeTypes,s.manualJointsMap,s.jointConfig,s.presetName,s.presetColor,s.productRules]);}

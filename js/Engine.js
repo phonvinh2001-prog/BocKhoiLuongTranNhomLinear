@@ -1,3 +1,7 @@
+import {panelPurchase} from './PanelPurchase.js';
+import {DEFAULT_SUPPLY} from './ProductRules.js';
+import {CALCULATION_VERSION,calculationKey,currentResult} from './CalculationVersion.js';
+import {panelRows,supplementalRuns,installedPanelArea} from './QuantityGeometry.js';
 /* 
 [FILE: ENGINE.JS] - LÕI TÍNH TOÁN TRẦN NHÔM LINEAR
 ============================================================
@@ -326,6 +330,7 @@ export default class Engine {
       document.getElementById("cfg_pW").value = this.currentPreset.pW;
       document.getElementById("cfg_gW").value = this.currentPreset.gW;
       document.getElementById("cfg_maxL").value = this.currentPreset.maxL;
+      const r=this.currentPreset.rules;if(r)for(const [id,key] of [['cfg_carrierL','carrierStockMm'],['cfg_rodStock','rodStockMm'],['cfg_cX','carrierStepMm'],['cfg_tY','hangerStepMm']])document.getElementById(id).value=String(r[key]/1000);
       this.calculate();
       this.autoSave();
       // Có thể thêm màu sắc nếu cần
@@ -926,7 +931,7 @@ export default class Engine {
     if (offset < pW / 2) offset += module / 2;
 
     // [VÒNG LẶP] Rải tấm: Từ start đến end, mỗi lần cách "module"
-    for (let pos = start - module + offset; pos < end; pos += module) {
+    for (const pos of panelRows(start,end,pW,gW)) {
       const center = pos + pW / 2; // Tâm tấm (dùng để bắn tia tìm cắt với tường)
       const segs = this.rayCast(center, isVert); // Bắn tia từ tâm tấm, tìm đoạn giao với tường
 
@@ -1033,15 +1038,16 @@ export default class Engine {
     this.state.warnings=[];this.state.carriers=[];this.state.hangers=[];this.state.carrierJoints=[];
     const cX=this.getInputValue('cfg_cX',0.5,5,1),tY=this.getInputValue('cfg_tY',0.5,5,1),stock=this.getInputValue('cfg_carrierL',1,12,3);
     const vertical=!isPanelVert;
-    for(const pos of this.getLinearDistribution(vertical?minX:minY,vertical?maxX:maxY,cX)) {
-      for(const seg of this.rayCast(pos,vertical,'STRUCTURE')) {
+    const initial=this.getLinearDistribution(vertical?minX:minY,vertical?maxX:maxY,cX).flatMap(pos=>this.rayCast(pos,vertical,'STRUCTURE').map(seg=>({pos,...seg})));
+    const all=[...initial,...supplementalRuns(this.state.points,this.state.openings||[],vertical,initial)];
+    const merged=[];for(const r of all.sort((a,b)=>a.pos-b.pos||a.start-b.start)){const prev=merged.at(-1);if(prev&&Math.abs(prev.pos-r.pos)<1e-8&&r.start<=prev.end+1e-8)prev.end=Math.max(prev.end,r.end);else merged.push({...r});}
+    for(const {pos,...seg} of merged) {
         const len=seg.end-seg.start;if(len<=1e-8)continue;
         const run={x1:vertical?pos:seg.start,y1:vertical?seg.start:pos,x2:vertical?pos:seg.end,y2:vertical?seg.end:pos,len,pieces:splitRun(len,stock)};
         let cursor=0;run.joints=run.pieces.slice(0,-1).map(l=>(cursor+=l));
         const at=t=>({x:run.x1+(run.x2-run.x1)*t/len,y:run.y1+(run.y2-run.y1)*t/len});
         const positions=[...this.getLinearDistribution(0,len,tY),...run.joints].sort((a,b)=>a-b).filter((x,i,a)=>!i||Math.abs(x-a[i-1])>1e-8);
         positions.forEach(p=>this.state.hangers.push(at(p)));run.joints.forEach(p=>this.state.carrierJoints.push(at(p)));this.state.carriers.push(run);
-      }
     }
   }
 
@@ -1332,19 +1338,23 @@ export default class Engine {
     const norm=mode==='NORM';if(norm){panelLen=ceilingArea/(pW+gW);}
     const carrierSegments=this.state.carriers.map(c=>c.len),carrierLen=norm?structureArea/this.getInputValue('cfg_cX',0.5,5,1):carrierSegments.reduce((a,b)=>a+b,0);
     const edgeLengths=type=>this.state.edges.filter(e=>e.type===type).map(e=>Math.hypot(e.p2.x-e.p1.x,e.p2.y-e.p1.y));
-    const trim=type=>{const a=edgeLengths(type),n=a.reduce((s,l)=>s+l,0);return {totalLen:n.toFixed(3),bars:Math.ceil(this.calculateOptimizedBars(a,3)*waste)};};
+    const trim=type=>{const stock=(this.currentPreset?.rules?.[type==='WALL_V'?'wallStockMm':type==='SHADOW'?'shadowStockMm':'fasciaStockMm']||3000)/1000,a=edgeLengths(type),n=a.reduce((s,l)=>s+l,0),plan=packCuts(a.flatMap(l=>splitRun(l,stock)),stock);return {totalLen:n.toFixed(3),stock,plan,bars:Math.ceil(plan.count*waste),segments:a};};
     const hangers=norm?Math.ceil(structureArea/(this.getInputValue('cfg_cX',0.5,5,1)*this.getInputValue('cfg_tY',0.5,5,1))):this.state.hangers.length;
     const length=this.getRodLength();const rodPlan=length===null||length>rodStock?null:packCuts(Array(hangers).fill(length),rodStock,0.005);
     const carrierPlan=packCuts(carrierSegments.flatMap(l=>splitRun(l,stock)),stock);
     const warnings=[...new Set(this.state.warnings||[])];if(length!==null&&length>rodStock)warnings.push('Ty lắp dài hơn cây ty; cần quy cách được duyệt, không tự nối');if(length===null)warnings.push('Thiếu cao độ neo/trần cùng mốc hoặc chiều dài ty lắp hợp lệ');
     if(this.state.strips.some(s=>s.pieces.some(p=>p.status==='BAD')))warnings.push('Có đoạn dưới chiều dài cắt tối thiểu; cần kiểm tra');
     if(this.state.openings?.length)warnings.push('Có lỗ kỹ thuật: đã trừ theo phạm vi từng lỗ; xương/ty gia cường và viền cong quanh lỗ cần cấu tạo riêng');
+    let purchase=null;try{if(!norm)purchase=panelPurchase(this.state.strips,this.currentPreset?.rules?.panelSupply||DEFAULT_SUPPLY,(waste-1)*100);}catch(e){warnings.push('Không lập được phôi tấm: '+e.message);}
+    const rules=this.currentPreset?.rules;if(!rules?.approved)warnings.push('Bộ sản phẩm chưa được duyệt; phụ kiện và cấp phôi cần xác nhận');
+    if(this.state.points.some((p,i)=>{const q=this.state.points[(i+1)%this.state.points.length];return Math.abs(p.x-q.x)>1e-8&&Math.abs(p.y-q.y)>1e-8;}))warnings.push('Biên xiên: chiều dài tấm đang theo tuyến tâm, cần bản gia công cắt xiên riêng');
+    if(rules&&!rules.accessories.length)warnings.push('Chưa khai báo định mức phụ kiện trong bộ sản phẩm');
     if(norm)warnings.push('Định mức chỉ tham khảo; chi tiết thanh và nối lấy từ bố trí thực tế');
-    return {schemaVersion:1,mode,presetName:this.currentPreset?.name||'Tùy chỉnh',color:this.currentPreset?.color||'#E3F2FD',totalArea:ceilingArea.toFixed(3),ceilingArea,grossArea,openingArea:grossArea-ceilingArea,structureArea,openingDetails:(this.state.openings||[]).map(h=>({id:h.id,name:h.name,scope:h.scope,area:h.type==='circle'?Math.PI*h.radius*h.radius:ringArea(h.points)})),panelFaceArea:this.state.strips.reduce((n,s)=>n+s.totalLen*s.width,0),panelWidth:pW*1000,warnings,complete:!warnings.length,
-      carriers:{totalLen:carrierLen.toFixed(3),bars:Math.ceil((norm?Math.ceil(carrierLen/stock):carrierPlan.count)*waste),couplers:Math.ceil(this.state.carriers.reduce((n,c)=>n+splitRun(c.len,stock).length-1,0)*waste),stock,plan:carrierPlan},
-      trims:trim('WALL_V'),shadowTrims:trim('SHADOW'),fascia:{totalLen:edgeLengths('FASCIA').reduce((a,b)=>a+b,0).toFixed(3),segments:edgeLengths('FASCIA')},
+    return {schemaVersion:1,mode,reservePct:(waste-1)*100,productRules:rules||null,presetName:this.currentPreset?.name||'Tùy chỉnh',color:this.currentPreset?.color||'#E3F2FD',totalArea:ceilingArea.toFixed(3),ceilingArea,grossArea,openingArea:grossArea-ceilingArea,structureArea,openingDetails:(this.state.openings||[]).map(h=>({id:h.id,name:h.name,scope:h.scope,area:h.type==='circle'?Math.PI*h.radius*h.radius:ringArea(h.points)})),panelFaceArea:installedPanelArea(this.state.points,this.state.openings||[],this.state.strips,this.getInputValue('cfg_wGap',0,500,0)/1000),panelWidth:pW*1000,warnings,complete:!warnings.length,
+      carriers:{netCouplers:this.state.carrierJoints.length,totalLen:carrierLen.toFixed(3),bars:Math.ceil((norm?Math.ceil(carrierLen/stock):carrierPlan.count)*waste),couplers:Math.ceil(this.state.carriers.reduce((n,c)=>n+splitRun(c.len,stock).length-1,0)*waste),stock,plan:norm?null:carrierPlan},
+      trims:trim('WALL_V'),shadowTrims:trim('SHADOW'),fascia:trim('FASCIA'),
       hangers:{total:hangers,sets:Math.ceil(hangers*waste),tyRenBars:rodPlan?Math.ceil(rodPlan.count*waste):null,installedLength:length,stock:rodStock,plan:rodPlan,details:{tyRenMeters:length===null?null:(hangers*length).toFixed(3),noDan:Math.ceil(hangers*waste),ecuLongDen:Math.ceil(hangers*2*waste),mocTreoXuong:Math.ceil(hangers*waste)}},
-      panels:{groups:panelGroups,totalLen:panelLen.toFixed(3)},accessories:{splicer:Math.ceil(splices*waste)}};
+      panels:{groups:norm?{}:panelGroups,totalLen:panelLen.toFixed(3),purchase},accessories:{netSplicer:splices,splicer:Math.ceil(splices*waste)}};
   }
 
   getRodLength() {
@@ -1366,19 +1376,23 @@ export default class Engine {
 
   boqRows(m,zone) {
     const rows=[['Khu vực','Vật tư','Loại khối lượng','Chiều dài (mm)','Số lượng','ĐVT','Tổng dài (m)','Chế độ']];
-    const add=(name,kind,len,qty,unit,total='')=>rows.push([zone,name,kind,len,qty,unit,total,m.mode]);
+    const add=(name,kind,len,qty,unit,total='')=>{const ids={'Xương':'carrierSku','Ty ren':'rodSku','V-góc':'wallSku','Shadow':'shadowSku','Mặt dựng':'fasciaSku'};const sku=m.productRules?.[ids[name]];rows.push([zone,sku?name+' ['+sku+']':name,kind,len,qty,unit,total,m.mode]);};
     if(Number.isFinite(m.grossArea)){add('Diện tích trần bao','Diện tích','',m.grossArea.toFixed(3),'m²');for(const h of m.openingDetails||[])add('Lỗ: '+h.name+(h.scope==='PANEL'?' (chỉ tấm)':' (tấm/xương/ty)'),'Diện tích','',h.area.toFixed(3),'m²');add('Diện tích trần net','Diện tích','',m.ceilingArea.toFixed(3),'m²');}
+    if(m.mode==='NORM')add('Thanh '+m.presetName,'Mét định mức','',m.panels.totalLen,'m',m.panels.totalLen);
+    for(const b of m.panels.purchase?.purchase||[])add('Tấm '+m.presetName+(m.productRules?' ['+m.productRules.sku+']':''),'Cây mua',b.length,b.quantity,'Cây',(b.length*b.quantity/1000).toFixed(3));
     for(const [len,item] of Object.entries(m.panels.groups))add('Thanh '+m.presetName,'Đoạn lắp',Math.round(Number(len)*1000),item.qty,'Thanh',(Number(len)*item.qty).toFixed(3));
     add('Xương','Mét lắp','',m.carriers.totalLen,'m',m.carriers.totalLen);
     add('Xương','Cây mua',m.carriers.stock*1000,m.carriers.bars,'Cây',(m.carriers.bars*m.carriers.stock).toFixed(3));
-    add('Nối xương','Mua','',m.carriers.couplers,'Cái');
+    if(!m.productRules&&m.mode!=='NORM')add('Nối xương','Mua','',m.carriers.couplers,'Cái');
     add('Ty treo','Điểm lắp',m.hangers.installedLength===null?'Chưa đủ cao độ':Math.round(m.hangers.installedLength*1000),m.hangers.total,'Ty',m.hangers.details.tyRenMeters??'Chưa đủ dữ liệu');
     add('Ty ren','Cây mua',m.hangers.stock*1000,m.hangers.tyRenBars??'Chưa đủ dữ liệu','Cây',m.hangers.tyRenBars===null?'':(m.hangers.tyRenBars*m.hangers.stock).toFixed(3));
-    add('Nở đạn','Mua','',m.hangers.details.noDan,'Cái');add('Móc treo','Mua','',m.hangers.details.mocTreoXuong,'Cái');add('Ecu/long đen','Mua','',m.hangers.details.ecuLongDen,'Bộ');
-    add('V-góc','Mét lắp','',m.trims.totalLen,'m',m.trims.totalLen);add('V-góc','Cây mua',3000,m.trims.bars,'Cây',(m.trims.bars*3).toFixed(3));
-    add('Shadow','Mét lắp','',m.shadowTrims.totalLen,'m',m.shadowTrims.totalLen);add('Shadow','Cây mua',3000,m.shadowTrims.bars,'Cây',(m.shadowTrims.bars*3).toFixed(3));
+    if(!m.productRules){add('Nở đạn','Mua','',m.hangers.details.noDan,'Cái');add('Móc treo','Mua','',m.hangers.details.mocTreoXuong,'Cái');add('Ecu/long đen','Mua','',m.hangers.details.ecuLongDen,'Bộ');}
+    else {const bases={hanger:m.hangers.total,carrierJoint:this.state.carrierJoints?.length||0,panelJoint:m.accessories.netSplicer,carrierMeter:Number(m.carriers.totalLen),panelMeter:Number(m.panels.totalLen),ceilingArea:m.ceilingArea,fasciaMeter:Number(m.fascia.totalLen)};bases.carrierJoint=m.carriers.netCouplers;for(const rule of m.productRules.accessories)if(m.mode==='NORM'&&['carrierJoint','panelJoint'].includes(rule.basis))add(rule.name+' ['+rule.sku+']','Cần bố trí','','Chưa có dữ liệu',rule.unit);else add(rule.name+' ['+rule.sku+']','Mua','',Math.ceil(bases[rule.basis]*rule.factor*(1+(m.reservePct||0)/100)),rule.unit);}
+    add('V-góc','Mét lắp','',m.trims.totalLen,'m',m.trims.totalLen);add('V-góc','Cây mua',(m.trims.stock||3)*1000,m.trims.bars,'Cây',(m.trims.bars*(m.trims.stock||3)).toFixed(3));
+    add('Shadow','Mét lắp','',m.shadowTrims.totalLen,'m',m.shadowTrims.totalLen);add('Shadow','Cây mua',(m.shadowTrims.stock||3)*1000,m.shadowTrims.bars,'Cây',(m.shadowTrims.bars*(m.shadowTrims.stock||3)).toFixed(3));
+    if(m.fascia.bars)add('Mặt dựng','Cây mua',m.fascia.stock*1000,m.fascia.bars,'Cây',(m.fascia.stock*m.fascia.bars).toFixed(3));
     m.fascia.segments.forEach(l=>add('Mặt dựng','Đoạn lắp',Math.round(l*1000),1,'Thanh',l.toFixed(3)));
-    add('Nối tấm','Mua','',m.accessories.splicer,'Cái');
+    if(!m.productRules&&m.mode!=='NORM')add('Nối tấm','Mua','',m.accessories.splicer,'Cái');
     m.warnings.forEach(w=>add('CẢNH BÁO: '+w,'Cần kiểm tra','','',''));
     return rows;
   }
@@ -1393,7 +1407,7 @@ export default class Engine {
 
   projectRows() {
     let rows=[];
-    for(const z of this.state.projectZones){const m=z.stats?.accessories;if(m?.schemaVersion===1){const r=this.boqRows(m,z.name);rows.push(...(rows.length?r.slice(1):r));}else rows.push([z.name,'Kết quả phiên bản cũ: mở và tính lại trước khi xuất']);}
+    for(const z of this.state.projectZones){const m=z.stats?.accessories;if(m?.schemaVersion===1&&currentResult(z)){const r=this.boqRows(m,z.name);rows.push(...(rows.length?r.slice(1):r));}else rows.push([z.name,'Kết quả phiên bản cũ: mở và tính lại trước khi xuất']);}
     return rows.length?rows:[['Chưa có phòng đã lưu']];
   }
 
@@ -1409,7 +1423,7 @@ export default class Engine {
 
   captureState() {
     const inputs={};document.querySelectorAll('input[id],select[id]').forEach(el=>{if(/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(el.id))inputs[el.id]=el.value;});
-    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),openings:structuredClone(this.state.openings||[]),zoneId:this.state.activeZoneId||null,zoneName:document.getElementById('projectName')?.value||'',edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
+    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),openings:structuredClone(this.state.openings||[]),zoneId:this.state.activeZoneId||null,zoneName:document.getElementById('projectName')?.value||'',edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',productRules:structuredClone(this.currentPreset?.rules||null),manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
   }
 
   restoreState(data) {
@@ -1420,7 +1434,7 @@ export default class Engine {
     for(const [k,v] of Object.entries(data.inputs||{})){const el=document.getElementById(k);if(el&&/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k))el.value=v;}
     this.state.jointConfig=structuredClone(data.jointConfig||{pattern:data.inputs?.cfg_joint_pattern||'DEFAULT',patternShift:Number(data.inputs?.cfg_joint_shift||50)/100});
     this.state.manualJointsMap=structuredClone(data.manualJointsMap||{});
-    this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD'};
+    this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD',rules:data.productRules||null};
     // Preserve saved geometry, rather than regenerate U/L with missing legacy controls.
     this.state.openings=structuredClone(data.openings||[]);this.state.activeZoneId=data.zoneId||null;
     const name=document.getElementById('projectName');if(name)name.value=data.zoneName||this.state.projectZones.find(z=>z.id===data.zoneId)?.name||name.value;
@@ -1540,6 +1554,7 @@ export default class Engine {
       stats, // [THỐNG KÊ] Tóm tắt chiếu dài, số lượng, v.v
     };
 
+    metrics.calculationVersion=CALCULATION_VERSION;metrics.calculationKey=calculationKey(savedState);
     return record;
   }
 
@@ -2324,15 +2339,17 @@ export default class Engine {
   }
 
   cutRows(metrics,zone) {
-    const rows=[['Khu vực','Vật tư','Cây số','Stock (mm)','Các đoạn (mm)','Kerf (mm)','Dư (mm)']];
-    for(const [name,plan] of [['Xương',metrics.carriers.plan],['Ty ren',metrics.hangers.plan]])if(plan)plan.bars.forEach((b,i)=>rows.push([zone,name,i+1,plan.stock*1000,b.cuts.map(l=>Math.round(l*1000)).join(' + '),Math.round(b.kerf*1000),Math.round(b.remaining*1000)]));
+    const rows=[['Khu vực','Vật tư','Cây số','Stock (mm)','Các đoạn (mm)','Kerf (mm)','Dư (mm)','Dư gia công (mm)']];
+    if(metrics.mode==='NORM')return rows;
+    metrics.panels.purchase?.stocks.forEach((b,i)=>rows.push([zone,'Tấm '+metrics.presetName,i+1,b.length,b.cuts.join(' + '),Math.max(0,b.cuts.length-1)*metrics.panels.purchase.config.kerf,b.remaining,b.allowance||0]));
+    for(const [name,plan] of [['Xương',metrics.carriers.plan],['Ty ren',metrics.hangers.plan],['V-góc',metrics.trims.plan],['Shadow',metrics.shadowTrims.plan],['Mặt dựng',metrics.fascia.plan]])if(plan)plan.bars.forEach((b,i)=>rows.push([zone,name,i+1,plan.stock*1000,b.cuts.map(l=>Math.round(l*1000)).join(' + '),Math.round(b.kerf*1000),Math.round(b.remaining*1000)]));
     return rows;
   }
 
   exportWorkbook(project=false) {
     let rows=[],cuts=[];
     const add=(m,name)=>{const r=this.boqRows(m,name),c=this.cutRows(m,name);rows.push(...(rows.length?r.slice(1):r));cuts.push(...(cuts.length?c.slice(1):c));};
-    if(project){for(const z of this.state.projectZones){if(z.stats?.accessories?.schemaVersion!==1)return this.showFeedback('Có phòng phiên bản cũ: mở và tính lại trước','error');add(z.stats.accessories,z.name);}}
+    if(project){for(const z of this.state.projectZones){if(z.stats?.accessories?.schemaVersion!==1||!currentResult(z))return this.showFeedback('Có phòng phiên bản cũ: mở và tính lại trước','error');add(z.stats.accessories,z.name);}}
     else {this.calculate();add(this.calculateBOQData(),document.getElementById('projectName')?.value||'Phòng hiện tại');}
     if(!rows.length)return this.showFeedback('Chưa có kết quả','error');
     const summary=this.purchaseSummary(rows);
