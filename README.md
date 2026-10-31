@@ -1,6 +1,8 @@
 # ALU-MASTER STUDIO
 
-## Bản nâng cấp v18.5 — ứng viên kiểm tra
+## Bản nâng cấp v18.5.1 — ứng viên kiểm tra
+
+v18.5.1 bỏ lựa chọn Hình mẫu/Vẽ tự do và lệnh trùng khỏi cột phải; cột phải tập trung thông số trần. Nhập bản vẽ, tạo lỗ và chỉnh nối đặt trong khung vẽ. Xem [ghi chú cột thông số](docs/INSPECTOR-v18.5.1.md). Thay đổi này chỉ sắp xếp giao diện, chưa sửa các lỗi thuật toán phát hiện trong audit v18.5.
 
 Giao diện: khu vực bên trái, bản vẽ trung tâm, thuộc tính bên phải và QS bên dưới; lớp vật tư bật/tắt độc lập, bảng Lắp đặt/Cắt cây/Đặt mua/Cảnh báo, tìm vật tư và menu xuất tập trung. Xem [ghi chú giao diện](docs/UI-v18.1.md).
 
