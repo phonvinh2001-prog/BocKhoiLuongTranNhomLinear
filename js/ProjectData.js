@@ -1,3 +1,4 @@
+import {validateRules} from './ProductRules.js';
 import {openingsError} from './PlanGeometry.js';
 export function validateCad(c){
   if(!c)return;if(c.version!==1||!Array.isArray(c.dimensions)||c.dimensions.length>2000)throw Error('Dữ liệu DIM không hợp lệ');
@@ -17,12 +18,12 @@ export function validateSnapshot(s) {
   if(s.openings?.length){const err=openingsError(s.points,s.openings);if(err)throw Error(err);}else if(s.openings&&!Array.isArray(s.openings))throw Error('Danh sách lỗ không hợp lệ');
   if(s.zoneId!==undefined&&s.zoneId!==null&&!['string','number'].includes(typeof s.zoneId))throw Error('ID vùng không hợp lệ');
   if(s.zoneName!==undefined&&typeof s.zoneName!=='string')throw Error('Tên vùng không hợp lệ');
-  validateCad(s.cad);return s;
+  if(s.productRules)validateRules(s.productRules);validateCad(s.cad);return s;
 }
 export function validateProject(p){
   if(!p||!['17.0','18.0'].includes(p.version)||!Array.isArray(p.projectZones)||p.projectZones.length>10000)throw new Error('Phiên bản/cấu trúc dự án không được hỗ trợ');
   p.projectZones.forEach(z=>{if(!z||typeof z.name!=='string'||!z.stats||!Number.isFinite(z.stats.totalLinear))throw new Error('Khu vực không hợp lệ');validateSnapshot(z.savedState);});
   if(p.currentWork)validateSnapshot(p.currentWork);
   if(p.presets&&(!Array.isArray(p.presets)||!p.presets.every(x=>x&&typeof x.name==='string'&&[x.pW,x.gW,x.maxL].every(Number.isFinite)&&x.pW>0&&x.gW>=0&&x.maxL>0)))throw new Error('Thư viện mẫu không hợp lệ');
-  return p;
+  for(const preset of p.presets||[])if(preset.rules)validateRules(preset.rules);return p;
 }

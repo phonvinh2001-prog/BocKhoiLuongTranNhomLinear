@@ -1,3 +1,4 @@
+import {currentResult} from './CalculationVersion.js';
 import {CadSession,parseCadInput,polygonError,segmentsOf,distance,project} from './CadGeometry.js';
 import {openingsError,openingArea,openingBounds,openingLocation,pointInRegion,regionsOverlap} from './PlanGeometry.js';
 import {normalizeRegions,linkSnapshot,translateRegion,regionHits,overlappingRegion} from './RegionEditing.js';
@@ -25,12 +26,17 @@ export default class PlanController{
     document.getElementById('projectName').value=s.name;this.app.restoreState(s.work);this.selectedIds=new Set(s.work.zoneId!==null?[s.work.zoneId]:[]);this.restoring=false;this.refresh();this.ui.refresh();this.app.draw();this.app.autoSave();
   }
   build(){
-    const panel=document.createElement('details');panel.className='inspector-section plan-openings';panel.open=true;
-    panel.innerHTML='<summary>Vùng trần & lỗ kỹ thuật</summary><div class="section-content"><div class="plan-actions"><button data-plan="SELECT">SELECT · Chọn</button><button data-plan="MOVE">MOVE · Di chuyển</button><button data-plan="TRIM">Viền</button><button data-plan="PL">+ Vùng trần</button><button data-plan="REC">+ Vùng chữ nhật</button><button data-plan="HOLE">Lỗ đa giác</button><button data-plan="HREC">Lỗ chữ nhật</button><button data-plan="HC">Lỗ tròn</button></div><p>SELECT để chọn vùng. PL/REC để thêm vùng. Enter/Hoàn tất đóng hình; Esc/Hủy bỏ nháp. Đổi công cụ hoặc chọn vùng khác sẽ bỏ nháp chưa hoàn tất.</p><label for="plan_hole_scope">Mặc định lỗ mới</label><select id="plan_hole_scope"><option value="VOID">Trừ tấm, xương và ty</option><option value="PANEL">Chỉ trừ tấm</option></select><div id="plan_circle_tools" hidden><p id="plan_circle_stage"></p><label for="plan_circle_radius">Bán kính (mm)</label><input id="plan_circle_radius" type="text" inputmode="decimal" value="300" placeholder="300 hoặc 0.3m"><button id="plan_circle_create" type="button">Tạo đường tròn</button></div><p id="plan_selection_status" role="status"></p><div id="plan_opening_list"></div><p id="plan_review" role="status"></p></div>';
-    document.querySelector('.workspace-inspector .scroll-area').prepend(panel);
-    panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('click',()=>this.cad.command(b.dataset.plan)));
-    const toolbar=document.querySelector('.cad-toolbar');const b=document.createElement('button');b.type='button';b.textContent='HOLE · Lỗ';b.dataset.plan='HOLE';b.addEventListener('click',()=>this.cad.command('HOLE'));toolbar.prepend(b);
-    for(const [cmd,label]of [['MOVE','M · Di chuyển'],['SELECT','SELECT · Chọn']]){const button=document.createElement('button');button.type='button';button.textContent=label;button.dataset.interaction=cmd;button.addEventListener('click',()=>this.cad.command(cmd));toolbar.prepend(button);}
+    const panel=document.createElement('details');panel.className='inspector-section plan-openings';panel.open=false;
+    panel.innerHTML='<summary>Phạm vi trừ lỗ kỹ thuật</summary><div class="section-content"><label for="plan_hole_scope">Mặc định lỗ mới</label><select id="plan_hole_scope"><option value="VOID">Trừ tấm, xương và ty</option><option value="PANEL">Chỉ trừ tấm</option></select><div id="plan_opening_list"></div><p id="plan_review" role="status"></p></div>';
+    document.querySelector('.workspace-inspector .scroll-area').append(panel);
+    const toolbar=document.querySelector('.cad-toolbar');
+    const holes=document.createElement('details');holes.className='cad-tool-menu';holes.innerHTML='<summary>Lỗ ▾</summary><div><button data-plan="HOLE">Lỗ đa giác · HPL</button><button data-plan="HREC">Lỗ chữ nhật · HREC</button><button data-plan="HC">Lỗ tròn · HC</button></div>';toolbar.prepend(holes);
+    holes.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('click',()=>{holes.open=false;this.cad.command(b.dataset.plan);document.getElementById('cmd-input').focus();}));
+    for(const [cmd,label]of [['TRIM','Viền'],['MOVE','M · Di chuyển'],['SELECT','SELECT · Chọn']]){const button=document.createElement('button');button.type='button';button.textContent=label;button.dataset.plan=cmd;button.addEventListener('click',()=>{this.cad.command(cmd);document.getElementById('cmd-input').focus();});toolbar.prepend(button);}
+    const joints=document.createElement('details');joints.className='cad-tool-menu';joints.innerHTML='<summary>Nối ▾</summary><div></div>';const jointButton=document.getElementById('btn_toggle_joint_edit'),jointGroup=jointButton?.parentElement;if(jointGroup){joints.querySelector('div').append(...jointGroup.children);joints.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>joints.open=false));jointGroup.remove();const hint=document.getElementById('hint_joint_edit');if(hint)joints.querySelector('div').append(hint);toolbar.append(joints);}
+    const circle=document.createElement('div');circle.id='plan_circle_tools';circle.hidden=true;circle.innerHTML='<p id="plan_circle_stage"></p><label for="plan_circle_radius">R (mm)</label><input id="plan_circle_radius" type="text" inputmode="decimal" value="300" placeholder="300 hoặc 0.3m"><button id="plan_circle_create" type="button">Tạo đường tròn</button>';
+    toolbar.after(circle);const selection=document.createElement('p');selection.id='plan_selection_status';selection.hidden=true;document.getElementById('cmd-bar-container').append(selection);
+    document.addEventListener('click',e=>{for(const menu of [holes,joints])if(!menu.contains(e.target))menu.open=false;});
     document.getElementById('plan_circle_create').addEventListener('click',()=>this.createCircle());document.getElementById('plan_circle_radius').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.stopPropagation();this.createCircle();}});document.getElementById('plan_circle_radius').addEventListener('input',()=>{try{this.circleRadiusPreview=parseLength(document.getElementById('plan_circle_radius').value,'mm');this.app.draw();}catch{}});
     const fit=document.createElement('button');fit.textContent='Vùng chọn';fit.title='Vừa khung vùng đang chọn (ZA)';fit.addEventListener('click',()=>this.ui.fit(this.app.state.points));document.querySelector('.drawing-tools>div').prepend(fit);
     document.querySelector('.zones-help').textContent='Các vùng cùng mặt bằng. Chọn vùng để sửa; mỗi lỗ thuộc vùng đang chọn. SELECT chọn vùng; Shift chọn nhiều, click lặp để chọn vùng chồng. M di chuyển. Chỉ PL/REC hoặc lưu vùng mới mới tạo vùng.';
@@ -66,7 +72,7 @@ export default class PlanController{
     const a=this.app,index=a.state.projectZones.findIndex(z=>z.id===a.state.activeZoneId);if(index<0&&!create)return false;
     if(a.state.mode==='DRAW'||polygonError(a.state.points))throw Error('Khép kín hoặc hủy vùng đang vẽ trước');
     const current=a.captureState(),previous=index>=0?a.state.projectZones[index]:null;
-    if(!force&&previous?.stats?.accessories?.schemaVersion===1&&workSignature(current)===workSignature(previous.savedState))return false;
+    if(!force&&previous?.stats?.accessories?.schemaVersion===1&&currentResult(previous)&&workSignature(current)===workSignature(previous.savedState))return false;
     this.persisting=true;
     try{
       if(calculate&&quantitySignature(current)!==this.lastCalculatedSignature)a.calculate();

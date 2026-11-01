@@ -7,7 +7,7 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ALU-MASTER · Không gian QS v18.5</title>
+    <title>ALU-MASTER · Không gian QS v19.1</title>
     <link rel="stylesheet" href="css/style.css" />
     <link rel="stylesheet" href="css/workspace.css" />
     <link rel="stylesheet" href="css/cad.css" />
@@ -264,9 +264,9 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
             <button
               class="btn-icon-only"
               onclick="app.openPresetModal()"
-              title="Tạo mẫu mới"
+              title="Quản lý và sửa mẫu" aria-label="Sửa mẫu đang chọn"
             >
-              <i data-lucide="plus" class="icon-xs"></i>
+              Sửa
             </button>
           </div>
           <div class="row">
@@ -642,9 +642,9 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
         </div>
         <div class="modal-body">
           <div class="form-section">
-            <h4><i data-lucide="plus" class="icon-xs"></i> Tạo Mẫu Mới</h4>
+            <h4 id="preset_edit_title">Thông tin mẫu</h4><button type="button" class="btn btn-secondary" onclick="app.startNewPreset()">+ Tạo mẫu mới</button>
             <div class="row sm-gap">
-              <label>Tên Mẫu</label
+              <label for="newPresetName">Tên Mẫu</label
               ><input
                 type="text"
                 id="newPresetName"
@@ -653,15 +653,15 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
               />
             </div>
             <div class="row sm-gap">
-              <label>Bản rộng (mm)</label
+              <label for="newPresetPW">Bản rộng (mm)</label
               ><input type="number" id="newPresetPW" placeholder="100" />
             </div>
             <div class="row sm-gap">
-              <label>Khe hở (mm)</label
+              <label for="newPresetGW">Khe hở (mm)</label
               ><input type="number" id="newPresetGW" placeholder="15" />
             </div>
             <div class="row sm-gap">
-              <label>Max dài (m)</label
+              <label for="newPresetMaxL">Max dài (m)</label
               ><input
                 type="number"
                 id="newPresetMaxL"
@@ -670,15 +670,15 @@ Hệ thống hỗ trợ BÓC TÁCH TRẦN NHÔM LINEAR & TẤM MẶT DỰNG (FAS
               />
             </div>
             <div class="row sm-gap">
-              <label>Màu sắc</label
+              <label for="newPresetColor">Màu sắc</label
               ><input type="color" id="newPresetColor" value="#E3F2FD" />
             </div>
             <button
               class="btn btn-primary mt-2 width-100"
-              onclick="app.saveNewPreset()"
+              id="preset_save_button" onclick="app.saveNewPreset()"
             >
               <i data-lucide="save" class="icon-xs"></i> Lưu Mẫu
-            </button>
+            </button><p id="preset_edit_status" role="status"></p>
           </div>
           <div class="list-section">
             <h4><i data-lucide="list" class="icon-xs"></i> Danh sách</h4>

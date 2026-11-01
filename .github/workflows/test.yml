@@ -8,4 +8,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test tests/regression.test.mjs tests/cad-workflow.test.mjs tests/plan.test.mjs tests/region-editing.test.mjs
+      - run: node --test tests/regression.test.mjs tests/cad-workflow.test.mjs tests/plan.test.mjs tests/region-editing.test.mjs tests/qs-acceptance.test.mjs tests/product-rules.test.mjs tests/product-editing.test.mjs

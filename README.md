@@ -1,6 +1,12 @@
 # ALU-MASTER STUDIO
 
-## Bản nâng cấp v18.5 — ứng viên kiểm tra
+## QS19.1 — bản nghiệm thu
+
+v19.1 sửa thông tin mẫu trực tiếp trong form, cập nhật đúng mẫu, giữ mẫu khác và gộp JSON; xem [hướng dẫn sửa mẫu](docs/EDIT-PRESET-v19.1.md).
+
+QS19 bổ sung gộp phôi tấm từ GopKichThuoc, bộ mã/quy tắc JSON và sửa các lỗi audit đã có ca kiểm tra. Xem [phạm vi nghiệm thu và giới hạn QS19](docs/QS19.md). Chưa xác nhận quy cách sản phẩm thực hay gia công tại xưởng.
+
+v18.5.1 bỏ lựa chọn Hình mẫu/Vẽ tự do và lệnh trùng khỏi cột phải; cột phải tập trung thông số trần. Nhập bản vẽ, tạo lỗ và chỉnh nối đặt trong khung vẽ. Xem [ghi chú cột thông số](docs/INSPECTOR-v18.5.1.md). Thay đổi này chỉ sắp xếp giao diện, chưa sửa các lỗi thuật toán phát hiện trong audit v18.5.
 
 Giao diện: khu vực bên trái, bản vẽ trung tâm, thuộc tính bên phải và QS bên dưới; lớp vật tư bật/tắt độc lập, bảng Lắp đặt/Cắt cây/Đặt mua/Cảnh báo, tìm vật tư và menu xuất tập trung. Xem [ghi chú giao diện](docs/UI-v18.1.md).
 
