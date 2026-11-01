@@ -19,3 +19,5 @@ button,select,input,summary{font:inherit}button{cursor:pointer}button:disabled{c
 .section-content .row{display:grid;grid-template-columns:minmax(0,1fr) 112px;align-items:center;gap:8px;min-height:34px;margin:4px 0}
 .section-content .row label{line-height:1.5;min-width:0}.section-content .row input,.section-content .row select{max-width:100%}
 .section-content .row:has(#cfg_preset){grid-template-columns:minmax(0,1fr) 110px 27px}
+.preset-edit-row{display:flex;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid #e1e7ee}.preset-edit-row span{flex:1;font-size:12px;min-width:0;overflow-wrap:anywhere}.preset-edit-row button{border:1px solid #c4d7e4;background:#f1f6fa;border-radius:4px;padding:5px 9px;color:#285d83;font-size:12px}#preset_edit_status{font-size:12px;line-height:1.5;color:#285d83}#presetModal .modal-body input{min-width:0}#presetModal .modal-body label{font-size:12px}
+#presetModal .row:has(#newPresetName){display:block}#presetModal .row:has(#newPresetName) label{display:block;width:auto;margin-bottom:5px}#presetModal #newPresetName{width:100%}

@@ -1,3 +1,4 @@
+import {updateProduct,mergeProducts,productIndex,createProduct} from './ProductEditing.js';
 import {panelPurchase} from './PanelPurchase.js';
 import {DEFAULT_SUPPLY} from './ProductRules.js';
 import {CALCULATION_VERSION,calculationKey,currentResult} from './CalculationVersion.js';
@@ -340,21 +341,13 @@ export default class Engine {
   }
 
   openPresetModal() {
-    this.renderPresetList();
-    // [FIX] Use classList to show modal (override CSS !important)
-    document.getElementById("presetModal").classList.remove("hidden");
+    this.renderPresetList();const index=productIndex(this.userPresets,this.currentPreset);
+    if(index>=0)this.editPreset(index);else this.startNewPreset();
+    document.getElementById('presetModal').classList.remove('hidden');
   }
-
-  renderPresetList() {
-    const list = document.getElementById("presetList");
-    list.innerHTML = "";
-    this.userPresets.forEach((p, i) => {
-      const div = document.createElement("div");
-      div.style = "margin: 5px 0; padding: 5px; border: 1px solid #ccc;";
-      div.innerHTML = `${escapeHTML(p.name)} - ${p.pW}mm x ${p.gW}mm <button onclick="app.deletePreset(${i})">Xóa</button>`;
-      list.appendChild(div);
-    });
-  }
+  editPreset(index){const p=this.userPresets[index];if(!p)return;this.presetEditTarget=structuredClone(p);for(const [id,key] of [['newPresetName','name'],['newPresetPW','pW'],['newPresetGW','gW'],['newPresetMaxL','maxL'],['newPresetColor','color']])document.getElementById(id).value=p[key]??(key==='color'?'#E3F2FD':'');document.getElementById('preset_edit_title').textContent='Sửa mẫu: '+p.name;document.getElementById('preset_save_button').textContent='Lưu thay đổi';document.getElementById('preset_edit_status').textContent='';}
+  startNewPreset(){this.presetEditTarget=null;for(const id of ['newPresetName','newPresetPW','newPresetGW','newPresetMaxL'])document.getElementById(id).value='';document.getElementById('newPresetColor').value='#E3F2FD';document.getElementById('preset_edit_title').textContent='Tạo mẫu mới';document.getElementById('preset_save_button').textContent='Tạo mẫu';document.getElementById('preset_edit_status').textContent='';}
+  renderPresetList(){const list=document.getElementById('presetList');if(!list)return;list.replaceChildren();this.userPresets.forEach((p,i)=>{const row=document.createElement('div');row.className='preset-edit-row';const text=document.createElement('span');text.textContent=p.name+' · '+p.pW+' / '+p.gW+' mm · '+p.maxL+' m';row.append(text);for(const [label,fn] of [['Sửa',()=>this.editPreset(i)],['Xóa',()=>this.deletePreset(i)]]){const button=document.createElement('button');button.type='button';button.textContent=label;button.addEventListener('click',fn);row.append(button);}list.append(row);});}
 
   deletePreset(idx) {
     this.userPresets.splice(idx, 1);
@@ -1318,14 +1311,12 @@ export default class Engine {
     return packCuts(segments.flatMap(s=>splitRun(s,barLength)),barLength,sawBladeWidth).count;
   }
 
-  saveNewPreset() {
-    const name=document.getElementById('newPresetName').value.trim();
-    const pW=Number(document.getElementById('newPresetPW').value),gW=Number(document.getElementById('newPresetGW').value),maxL=Number(document.getElementById('newPresetMaxL').value);
-    if(!name||!Number.isFinite(pW)||pW<10||pW>1000||!Number.isFinite(gW)||gW<0||!Number.isFinite(maxL)||maxL<0.5||maxL>12)return this.showFeedback('Quy cách sản phẩm không hợp lệ','error');
-    this.userPresets.push({name,pW,gW,maxL,color:document.getElementById('newPresetColor').value});
-    saveToStorage('USER_PRESETS',this.userPresets);this.updatePresetDropdown();
-    document.getElementById('cfg_preset').value=String(this.userPresets.length-1);this.applyPreset();this.renderPresetList();
-    document.getElementById('presetModal').classList.add('hidden');this.showFeedback('Đã lưu mẫu sản phẩm','success');
+  saveNewPreset(){
+    try{if(this.plan?.status().busy)throw Error('Hoàn tất hoặc hủy lệnh vẽ trước khi lưu mẫu');const name=document.getElementById('newPresetName').value.trim(),pW=Number(document.getElementById('newPresetPW').value),gW=Number(document.getElementById('newPresetGW').value),maxL=Number(document.getElementById('newPresetMaxL').value),color=document.getElementById('newPresetColor').value;
+    for(const id of ['newPresetPW','newPresetGW','newPresetMaxL'])if(!document.getElementById(id).value.trim())throw Error('Nhập đầy đủ thông số mẫu');
+    const result=this.presetEditTarget?updateProduct(this.userPresets,productIndex(this.userPresets,this.presetEditTarget),{name,pW,gW,maxL,color}):createProduct(this.userPresets,{name,pW,gW,maxL,color});
+    localStorage.setItem('USER_PRESETS',JSON.stringify(result.products));this.userPresets=result.products;this.updatePresetDropdown();document.getElementById('cfg_preset').value=String(result.index);this.applyPreset();this.renderPresetList();this.editPreset(result.index);document.getElementById('preset_edit_status').textContent='Đã lưu mẫu và áp dụng cho vùng hiện tại';this.saveState();
+    }catch(e){document.getElementById('preset_edit_status').textContent='Chưa lưu: '+e.message;}
   }
 
   calculateBOQData(forceMode = null) {
@@ -1423,7 +1414,7 @@ export default class Engine {
 
   captureState() {
     const inputs={};document.querySelectorAll('input[id],select[id]').forEach(el=>{if(/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(el.id))inputs[el.id]=el.value;});
-    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),openings:structuredClone(this.state.openings||[]),zoneId:this.state.activeZoneId||null,zoneName:document.getElementById('projectName')?.value||'',edgeTypes:this.state.edges.map(e=>e.type),presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',productRules:structuredClone(this.currentPreset?.rules||null),manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
+    return {schemaVersion:2,ts:Date.now(),inputMode:this.state.inputMode,inputs,points:structuredClone(this.state.points),openings:structuredClone(this.state.openings||[]),zoneId:this.state.activeZoneId||null,zoneName:document.getElementById('projectName')?.value||'',edgeTypes:this.state.edges.map(e=>e.type),presetId:this.currentPreset?.id||null,presetName:this.currentPreset?.name||'Tùy chỉnh',presetColor:this.currentPreset?.color||'#E3F2FD',productRules:structuredClone(this.currentPreset?.rules||null),manualJointsMap:structuredClone(this.state.manualJointsMap||{}),jointConfig:structuredClone(this.state.jointConfig)};
   }
 
   restoreState(data) {
@@ -1434,7 +1425,8 @@ export default class Engine {
     for(const [k,v] of Object.entries(data.inputs||{})){const el=document.getElementById(k);if(el&&/^(cfg_|dim_|shp_|l_orient$|u_orient$)/.test(k))el.value=v;}
     this.state.jointConfig=structuredClone(data.jointConfig||{pattern:data.inputs?.cfg_joint_pattern||'DEFAULT',patternShift:Number(data.inputs?.cfg_joint_shift||50)/100});
     this.state.manualJointsMap=structuredClone(data.manualJointsMap||{});
-    this.currentPreset={name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD',rules:data.productRules||null};
+    this.currentPreset={id:data.presetId||null,name:data.presetName||'Tùy chỉnh',color:data.presetColor||'#E3F2FD',rules:data.productRules||null};
+    const presetSelect=document.getElementById('cfg_preset');if(presetSelect&&Array.isArray(this.userPresets)){const selected=productIndex(this.userPresets,this.currentPreset);presetSelect.value=selected<0?'':String(selected);}
     // Preserve saved geometry, rather than regenerate U/L with missing legacy controls.
     this.state.openings=structuredClone(data.openings||[]);this.state.activeZoneId=data.zoneId||null;
     const name=document.getElementById('projectName');if(name)name.value=data.zoneName||this.state.projectZones.find(z=>z.id===data.zoneId)?.name||name.value;

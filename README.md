@@ -1,6 +1,8 @@
 # ALU-MASTER STUDIO
 
-## QS19 — bản nghiệm thu
+## QS19.1 — bản nghiệm thu
+
+v19.1 sửa thông tin mẫu trực tiếp trong form, cập nhật đúng mẫu, giữ mẫu khác và gộp JSON; xem [hướng dẫn sửa mẫu](docs/EDIT-PRESET-v19.1.md).
 
 QS19 bổ sung gộp phôi tấm từ GopKichThuoc, bộ mã/quy tắc JSON và sửa các lỗi audit đã có ca kiểm tra. Xem [phạm vi nghiệm thu và giới hạn QS19](docs/QS19.md). Chưa xác nhận quy cách sản phẩm thực hay gia công tại xưởng.
 
